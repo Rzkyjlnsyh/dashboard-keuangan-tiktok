@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Asisten Keuangan TikTok</title>
+  <script>
+    if (window.location.protocol === "file:") {
+      window.location.replace("http://127.0.0.1:8787/");
+    }
+  </script>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="side">
+      <div class="brand">
+        <div class="mark">P</div>
+        <div>
+          <strong>Pare Finance</strong>
+          <span>Asisten Keuangan TikTok</span>
+        </div>
+      </div>
+      <nav>
+        <button class="active" data-view="owner">Owner</button>
+        <button data-view="sku">Detail SKU</button>
+        <button data-view="stores">Per Toko</button>
+        <button data-view="tv">TV Kantor</button>
+        <button data-view="ops">Upload & Otomatis</button>
+      </nav>
+      <div class="sync-card">
+        <span>Update terakhir</span>
+        <strong id="generatedAt">-</strong>
+        <button id="refreshBtn">Refresh</button>
+      </div>
+    </aside>
+
+    <main>
+      <header class="hero">
+        <div>
+          <p class="eyebrow">Realtime business health</p>
+          <h1 id="pageTitle">Owner Dashboard</h1>
+          <p id="pageSub">Profit, dana tertahan, potongan, HPP, dan SKU yang perlu diperhatikan.</p>
+        </div>
+        <div class="hero-actions">
+          <button id="sampleBtn">Impor Data Contoh</button>
+          <button id="jumpUploadBtn">Upload Data</button>
+        </div>
+      </header>
+
+      <section class="filters">
+        <div>
+          <span>Periode</span>
+          <div class="segments">
+            <button data-preset="all" class="active">All</button>
+            <button data-preset="last7">7 Hari</button>
+            <button data-preset="last14">14 Hari</button>
+            <button data-preset="thisMonth">Bulan Ini</button>
+            <button data-preset="month">Pilih Bulan</button>
+          </div>
+        </div>
+        <label>Bulan <select id="monthFilter"></select></label>
+        <label>Toko <select id="storeFilter"></select></label>
+      </section>
+
+      <section id="alerts" class="alerts"></section>
+
+      <section class="kpis">
+        <article><span>Order Unik</span><strong id="orders">0</strong><em id="todayOrders">Hari ini 0</em></article>
+        <article><span>Omset Terdata</span><strong id="omzet">Rp0</strong><em>Net dari data upload</em></article>
+        <article class="secret"><span>Profit Estimasi</span><strong id="profit">Rp0</strong><em id="margin">0%</em></article>
+        <article><span>Dana Tertahan</span><strong id="held">Rp0</strong><em>Belum cair / belum selesai</em></article>
+        <article class="secret"><span>Potongan Platform</span><strong id="platformFee">Rp0</strong><em>Fee terdeteksi</em></article>
+        <article class="secret"><span>Biaya Iklan</span><strong id="adSpend">Rp0</strong><em>Manual per toko</em></article>
+        <article class="secret"><span>HPP + Packing</span><strong id="hpp">Rp0</strong><em>Dari template SKU</em></article>
+      </section>
+
+      <section class="grid">
+        <article class="panel wide">
+          <div class="panel-head">
+            <div><span>Trend</span><strong id="trendTitle">Omset & Profit 30 Hari</strong></div>
+          </div>
+          <canvas id="trend" width="900" height="280"></canvas>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><span>Status</span><strong>Posisi Order</strong></div></div>
+          <div id="statusList" class="status-list"></div>
+        </article>
+      </section>
+
+      <section class="grid secret">
+        <article class="panel assistant-panel secret">
+          <div class="panel-head"><div><span>AI Finance Assistant</span><strong>Analisa & Rekomendasi</strong></div><b id="healthScore">0</b></div>
+          <div id="assistant" class="assistant"></div>
+        </article>
+        <article class="panel secret">
+          <div class="panel-head"><div><span>Forecast</span><strong>Proyeksi 30 Hari</strong></div></div>
+          <div class="forecast">
+            <div><span>Omset</span><strong id="forecastOmzet">Rp0</strong></div>
+            <div class="secret"><span>Profit</span><strong id="forecastProfit">Rp0</strong></div>
+          </div>
+          <div id="accountingBox" class="accounting"></div>
+        </article>
+      </section>
+
+      <section class="panel stores-only">
+        <div class="panel-head"><div><span>Dashboard Per Toko</span><strong>Perbandingan Semua Toko</strong></div></div>
+        <div id="storeCards" class="store-cards"></div>
+      </section>
+
+      <section class="grid">
+        <article class="panel">
+          <div class="panel-head"><div><span>SKU</span><strong>Profit Terbesar</strong></div></div>
+          <div class="table-wrap"><table id="topSku"></table></div>
+        </article>
+        <article class="panel secret">
+          <div class="panel-head"><div><span>Perhatian</span><strong>SKU Paling Lemah</strong></div></div>
+          <div class="table-wrap"><table id="weakSku"></table></div>
+        </article>
+      </section>
+
+      <section class="panel sku-only secret">
+        <div class="panel-head">
+          <div><span>Detail SKU</span><strong>Penghasil vs Kurang Bagus</strong></div>
+          <div class="table-controls">
+            <select id="skuStatus">
+              <option value="all">Semua status</option>
+              <option value="good">Penghasil</option>
+              <option value="watch">Perlu dipantau</option>
+              <option value="bad">Kurang bagus / rugi</option>
+              <option value="missing">HPP belum lengkap</option>
+            </select>
+            <select id="skuSort">
+              <option value="profit">Sort Profit</option>
+              <option value="margin">Sort Margin</option>
+              <option value="omzet">Sort Omset</option>
+              <option value="qty">Sort Qty</option>
+              <option value="refund">Sort Refund</option>
+              <option value="adSpend">Sort Iklan</option>
+            </select>
+          </div>
+        </div>
+        <div class="mini-kpis">
+          <div><span>Total SKU</span><strong id="skuTotal">0</strong></div>
+          <div><span>Penghasil</span><strong id="skuGood">0</strong></div>
+          <div><span>Kurang Bagus</span><strong id="skuBad">0</strong></div>
+          <div><span>HPP Belum Lengkap</span><strong id="skuMissing">0</strong></div>
+        </div>
+        <div id="skuInsight" class="sku-insight"></div>
+        <div class="table-wrap detail-table"><table id="skuDetailTable"></table></div>
+      </section>
+
+      <section id="uploadPanel" class="grid ops-only">
+        <article class="panel">
+          <div class="panel-head"><div><span>Upload</span><strong>Data SKU, Order, atau Pencairan</strong></div></div>
+          <form id="uploadForm" class="form">
+            <label>Toko
+              <select name="storeName" id="uploadStore"></select>
+            </label>
+            <label>Jenis file
+              <select name="kind">
+                <option value="auto">Auto baca masing-masing file</option>
+                <option value="sku">SKU / HPP</option>
+                <option value="orders">Order Desty</option>
+                <option value="settlement">Pencairan TikTok</option>
+              </select>
+            </label>
+            <label>File
+              <input id="fileInput" name="files" type="file" multiple accept=".csv,.xlsx">
+            </label>
+            <button>Upload & Update Dashboard</button>
+          </form>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><span>Iklan</span><strong>Update Biaya Iklan</strong></div></div>
+          <form id="adSpendForm" class="form">
+            <label>Toko <select name="storeName" id="adStore"></select></label>
+            <label>Tanggal <input name="spendDate" id="adSpendDate" type="date"></label>
+            <label>Nominal <input name="amount" inputmode="numeric" placeholder="Contoh: 250000"></label>
+            <label>Channel
+              <select name="channel">
+                <option value="TikTok Ads">TikTok Ads</option>
+                <option value="GMV Max">GMV Max</option>
+                <option value="Affiliate">Affiliate</option>
+                <option value="Lainnya">Lainnya</option>
+              </select>
+            </label>
+            <label>Campaign <input name="campaign" placeholder="Nama campaign, opsional"></label>
+            <label>Catatan <input name="note" placeholder="Catatan singkat, opsional"></label>
+            <button>Simpan Biaya Iklan</button>
+          </form>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><span>Auto Update Folder</span><strong>Scan Data Desty Berkala</strong></div></div>
+          <form id="folderForm" class="form">
+            <label>Folder download data <input name="path" placeholder="/Users/.../Downloads"></label>
+            <label>Toko <select name="storeName" id="folderStore"></select></label>
+            <label>Jenis file
+              <select name="kind">
+                <option value="auto">Auto baca file</option>
+                <option value="orders">Order Desty</option>
+                <option value="settlement">Pencairan TikTok</option>
+                <option value="sku">SKU / HPP</option>
+              </select>
+            </label>
+            <label>Interval
+              <select name="intervalMinutes">
+                <option value="5">5 menit</option>
+                <option value="10" selected>10 menit</option>
+              </select>
+            </label>
+            <label class="check"><input name="enabled" type="checkbox"> Aktifkan auto update</label>
+            <button>Simpan Auto Update</button>
+            <button type="button" id="folderRun">Scan Sekarang</button>
+            <p id="folderStatus" class="hint">Belum berjalan</p>
+          </form>
+        </article>
+      </section>
+
+      <section class="grid ops-only">
+        <article class="panel">
+          <div class="panel-head"><div><span>Telegram</span><strong>Ringkasan Otomatis Pagi</strong></div></div>
+          <form id="configForm" class="form">
+            <label>Bot Token <input name="telegramBotToken" placeholder="Isi token bot Telegram"></label>
+            <label>Chat ID <input name="telegramChatId" placeholder="Isi chat ID Telegram"></label>
+            <label>Jam kirim pagi <input name="morningTime" type="time" value="07:30"></label>
+            <button>Simpan Pengaturan</button>
+            <button type="button" id="telegramTest">Kirim Tes Telegram</button>
+          </form>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><div><span>Audit</span><strong>Riwayat Upload</strong></div></div>
+          <div id="runs" class="runs"></div>
+          <div class="panel-head compact-head"><div><span>Iklan</span><strong>Riwayat Biaya Iklan</strong></div></div>
+          <div id="adSpendRows" class="runs"></div>
+        </article>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

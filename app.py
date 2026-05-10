@@ -1,0 +1,1097 @@
+#!/usr/bin/env python3
+import csv
+import io
+import json
+import os
+import sqlite3
+import threading
+import time
+import urllib.parse
+import urllib.request
+from datetime import datetime, date, timedelta
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import pandas as pd
+
+
+ROOT = Path(__file__).resolve().parent
+DATA_DIR = ROOT / "data"
+UPLOAD_DIR = DATA_DIR / "uploads"
+DB_PATH = DATA_DIR / "finance_assistant.db"
+CONFIG_PATH = DATA_DIR / "config.json"
+SAMPLES = {
+    "orders": Path("/Users/djokoriwanto/Downloads/Order_20260506000116_165686.xlsx"),
+    "settlement": Path("/Users/djokoriwanto/Downloads/DESEMBER.csv"),
+    "sku": Path("/Users/djokoriwanto/Downloads/sku-template (1).csv"),
+}
+DEFAULT_STORES = ["ventura", "giftyours", "custombase"]
+DEFAULT_STORE = "ventura"
+
+
+def ensure_dirs():
+    DATA_DIR.mkdir(exist_ok=True)
+    UPLOAD_DIR.mkdir(exist_ok=True)
+
+
+def now_iso():
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def clean_col(value):
+    return str(value).replace("\n", " ").strip()
+
+
+def rupiah(value):
+    try:
+        return int(round(float(value or 0)))
+    except Exception:
+        return 0
+
+
+def parse_dt(value):
+    if pd.isna(value) or value == "":
+        return None
+    dayfirst = isinstance(value, str) and "/" in value
+    parsed = pd.to_datetime(value, errors="coerce", dayfirst=dayfirst)
+    if pd.isna(parsed):
+        return None
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def read_config():
+    if CONFIG_PATH.exists():
+        config = json.loads(CONFIG_PATH.read_text())
+    else:
+        config = {
+        "telegramBotToken": "",
+        "telegramChatId": "",
+        "morningTime": "07:30",
+        "alertNegativeProfit": True,
+        "alertMarginBelow": 12,
+        "lastMorningSent": "",
+    }
+    config.setdefault("stores", DEFAULT_STORES)
+    config.setdefault("defaultStore", DEFAULT_STORE)
+    config.setdefault(
+        "folderMonitor",
+        {
+            "enabled": False,
+            "path": "",
+            "intervalMinutes": 10,
+            "storeName": DEFAULT_STORE,
+            "kind": "auto",
+            "lastRun": "",
+            "lastMessage": "Belum berjalan",
+            "fileState": {},
+        },
+    )
+    return config
+
+
+def write_config(config):
+    CONFIG_PATH.write_text(json.dumps(config, indent=2))
+
+
+def connect():
+    ensure_dirs()
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    with connect() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sku_costs (
+                sku_key TEXT PRIMARY KEY,
+                store_name TEXT DEFAULT 'global',
+                sku TEXT,
+                product_name TEXT,
+                hpp_per_unit REAL DEFAULT 0,
+                packing_per_unit REAL DEFAULT 0,
+                updated_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS order_lines (
+                line_key TEXT PRIMARY KEY,
+                order_id TEXT,
+                store_name TEXT,
+                source TEXT,
+                created_at TEXT,
+                updated_at TEXT,
+                status TEXT,
+                sku TEXT,
+                product_name TEXT,
+                variation TEXT,
+                quantity REAL DEFAULT 0,
+                unit_price REAL DEFAULT 0,
+                gross_product REAL DEFAULT 0,
+                seller_discount REAL DEFAULT 0,
+                platform_discount REAL DEFAULT 0,
+                platform_fee REAL DEFAULT 0,
+                refund_amount REAL DEFAULT 0,
+                order_amount REAL DEFAULT 0,
+                settlement_received REAL DEFAULT 0,
+                payment_method TEXT,
+                tracking_id TEXT,
+                last_seen_file TEXT,
+                last_seen_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS import_runs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT,
+                kind TEXT,
+                store_name TEXT,
+                rows_seen INTEGER,
+                inserted INTEGER,
+                updated INTEGER,
+                notes TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS ad_spend (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                store_name TEXT,
+                spend_date TEXT,
+                amount REAL DEFAULT 0,
+                channel TEXT,
+                campaign TEXT,
+                note TEXT,
+                created_at TEXT,
+                updated_at TEXT
+            );
+            """
+        )
+        migrate_db(conn)
+
+
+def table_columns(conn, table):
+    return [row["name"] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+
+
+def ensure_column(conn, table, name, ddl):
+    if name not in table_columns(conn, table):
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+
+
+def normalize_store(value):
+    raw = str(value or "").strip().lower()
+    if not raw or raw in {"nan", "none", "tiktok", "pare custom", "pare digital custom", "tiktok - pare custom"}:
+        return DEFAULT_STORE
+    if "ventura" in raw:
+        return "ventura"
+    if "giftyours" in raw or "gift yours" in raw:
+        return "giftyours"
+    if "custombase" in raw or "custom base" in raw:
+        return "custombase"
+    for store in DEFAULT_STORES:
+        if raw == store.lower():
+            return store
+    return raw.replace(" ", "-")
+
+
+def migrate_db(conn):
+    cols = table_columns(conn, "sku_costs")
+    if "sku_key" not in cols:
+        conn.execute(
+            """
+            CREATE TABLE sku_costs_new (
+                sku_key TEXT PRIMARY KEY,
+                store_name TEXT DEFAULT 'global',
+                sku TEXT,
+                product_name TEXT,
+                hpp_per_unit REAL DEFAULT 0,
+                packing_per_unit REAL DEFAULT 0,
+                updated_at TEXT
+            )
+            """
+        )
+        for row in conn.execute("SELECT sku, product_name, hpp_per_unit, packing_per_unit, updated_at FROM sku_costs").fetchall():
+            sku = str(row["sku"] or "").strip()
+            if not sku:
+                continue
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO sku_costs_new
+                (sku_key, store_name, sku, product_name, hpp_per_unit, packing_per_unit, updated_at)
+                VALUES (?, 'global', ?, ?, ?, ?, ?)
+                """,
+                (f"global|{sku.lower()}", sku, row["product_name"], row["hpp_per_unit"], row["packing_per_unit"], row["updated_at"]),
+            )
+        conn.execute("DROP TABLE sku_costs")
+        conn.execute("ALTER TABLE sku_costs_new RENAME TO sku_costs")
+    ensure_column(conn, "import_runs", "store_name", "TEXT")
+    ensure_column(conn, "order_lines", "source_kind", "TEXT")
+    conn.execute(
+        """
+        UPDATE order_lines
+        SET store_name=?
+        WHERE lower(COALESCE(store_name, '')) IN ('', 'nan', 'none', 'tiktok', 'tiktok - pare custom', 'pare custom', 'pare digital custom')
+        """,
+        (DEFAULT_STORE,),
+    )
+    for row in conn.execute("SELECT DISTINCT store_name FROM order_lines").fetchall():
+        normalized = normalize_store(row["store_name"])
+        if normalized != row["store_name"]:
+            conn.execute("UPDATE order_lines SET store_name=? WHERE store_name=?", (normalized, row["store_name"]))
+    for row in conn.execute("SELECT line_key, store_name, order_id, sku, variation FROM order_lines").fetchall():
+        key = str(row["line_key"] or "")
+        new_key = line_key(row["store_name"], row["order_id"], row["sku"], row["variation"])
+        if new_key and new_key != key:
+            exists = conn.execute("SELECT 1 FROM order_lines WHERE line_key=?", (new_key,)).fetchone()
+            if exists:
+                conn.execute("DELETE FROM order_lines WHERE line_key=?", (key,))
+            else:
+                conn.execute("UPDATE order_lines SET line_key=? WHERE line_key=?", (new_key, key))
+
+
+def line_key(store_name, order_id, sku, variation):
+    raw = f"{normalize_store(store_name)}|{order_id}|{sku}|{variation}"
+    return raw.strip().lower()
+
+
+def upsert_line(conn, row):
+    existing = conn.execute(
+        "SELECT status, settlement_received, order_amount, platform_fee FROM order_lines WHERE line_key=?",
+        (row["line_key"],),
+    ).fetchone()
+    fields = [
+        "line_key", "order_id", "store_name", "source", "created_at", "updated_at", "status", "sku",
+        "product_name", "variation", "quantity", "unit_price", "gross_product", "seller_discount",
+        "platform_discount", "platform_fee", "refund_amount", "order_amount", "settlement_received",
+        "payment_method", "tracking_id", "last_seen_file", "last_seen_at",
+    ]
+    conn.execute(
+        f"""
+        INSERT INTO order_lines ({",".join(fields)})
+        VALUES ({",".join(["?"] * len(fields))})
+        ON CONFLICT(line_key) DO UPDATE SET
+            store_name=excluded.store_name,
+            source=excluded.source,
+            created_at=COALESCE(order_lines.created_at, excluded.created_at),
+            updated_at=COALESCE(excluded.updated_at, order_lines.updated_at),
+            status=excluded.status,
+            product_name=excluded.product_name,
+            variation=excluded.variation,
+            quantity=excluded.quantity,
+            unit_price=excluded.unit_price,
+            gross_product=excluded.gross_product,
+            seller_discount=excluded.seller_discount,
+            platform_discount=excluded.platform_discount,
+            platform_fee=excluded.platform_fee,
+            refund_amount=excluded.refund_amount,
+            order_amount=excluded.order_amount,
+            settlement_received=MAX(order_lines.settlement_received, excluded.settlement_received),
+            payment_method=excluded.payment_method,
+            tracking_id=COALESCE(excluded.tracking_id, order_lines.tracking_id),
+            last_seen_file=excluded.last_seen_file,
+            last_seen_at=excluded.last_seen_at
+        """,
+        [row.get(field) for field in fields],
+    )
+    return "inserted" if existing is None else "updated"
+
+
+def import_sku(path, store_name="global"):
+    store_name = "global" if str(store_name or "").lower() in {"", "all", "semua", "global"} else normalize_store(store_name)
+    df = pd.read_csv(path)
+    df.columns = [clean_col(c) for c in df.columns]
+    inserted = updated = 0
+    with connect() as conn:
+        for _, r in df.iterrows():
+            sku = str(r.get("sku", "")).strip()
+            if not sku:
+                continue
+            sku_key = f"{store_name}|{sku.lower()}"
+            exists = conn.execute("SELECT 1 FROM sku_costs WHERE sku_key=?", (sku_key,)).fetchone()
+            conn.execute(
+                """
+                INSERT INTO sku_costs (sku_key, store_name, sku, product_name, hpp_per_unit, packing_per_unit, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(sku_key) DO UPDATE SET
+                    store_name=excluded.store_name,
+                    sku=excluded.sku,
+                    product_name=excluded.product_name,
+                    hpp_per_unit=excluded.hpp_per_unit,
+                    packing_per_unit=excluded.packing_per_unit,
+                    updated_at=excluded.updated_at
+                """,
+                (
+                    sku_key,
+                    store_name,
+                    sku,
+                    str(r.get("productName", "")).strip(),
+                    float(rupiah(r.get("hppPerUnit", 0))),
+                    float(rupiah(r.get("packingPerUnit", 0))),
+                    now_iso(),
+                ),
+            )
+            if exists:
+                updated += 1
+            else:
+                inserted += 1
+        conn.execute(
+            "INSERT INTO import_runs (filename, kind, store_name, rows_seen, inserted, updated, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (Path(path).name, "sku", store_name, len(df), inserted, updated, "HPP dan packing diperbarui", now_iso()),
+        )
+    return {"kind": "sku", "storeName": store_name, "rows": len(df), "inserted": inserted, "updated": updated}
+
+
+def import_order_excel(path, store_name=None):
+    selected_store = normalize_store(store_name) if store_name else None
+    df = pd.read_excel(path, sheet_name="Daftar Pesanan")
+    df.columns = [clean_col(c) for c in df.columns]
+    inserted = updated = 0
+    with connect() as conn:
+        for _, r in df.iterrows():
+            order_id = str(r.get("Nomor Pesanan (di Marketplace)", "")).replace(".0", "").strip()
+            sku = str(r.get("SKU Marketplace", "")).strip()
+            if not order_id or not sku:
+                continue
+            qty = float(rupiah(r.get("Jumlah", 0)))
+            unit_price = float(rupiah(r.get("Harga Satuan", 0)))
+            row_store = selected_store or normalize_store(r.get("Channel - Nama Toko", DEFAULT_STORE))
+            row = {
+                "line_key": line_key(row_store, order_id, sku, r.get("Varian Produk", "")),
+                "order_id": order_id,
+                "store_name": row_store,
+                "source": "desty_order",
+                "created_at": parse_dt(r.get("Tanggal Pesanan Dibuat")),
+                "updated_at": parse_dt(r.get("Waktu Pesanan (Update)")),
+                "status": str(r.get("Status Pesanan", "")).strip(),
+                "sku": sku,
+                "product_name": str(r.get("Nama Produk", "")).strip(),
+                "variation": str(r.get("Varian Produk", "")).strip(),
+                "quantity": qty,
+                "unit_price": unit_price,
+                "gross_product": float(rupiah(r.get("Subtotal Produk", unit_price * qty))),
+                "seller_discount": abs(float(rupiah(r.get("Diskon Penjual", 0)))),
+                "platform_discount": 0,
+                "platform_fee": abs(float(rupiah(r.get("Biaya Layanan", 0)))) + abs(float(rupiah(r.get("Pajak", 0)))),
+                "refund_amount": abs(float(rupiah(r.get("Refund", 0)))),
+                "order_amount": float(rupiah(r.get("Total Faktur", 0) or r.get("Total Penjualan", 0))),
+                "settlement_received": float(rupiah(r.get("Penyelesaian Pembayaran", 0))),
+                "payment_method": str(r.get("Metode Pembayaran", "")).strip(),
+                "tracking_id": str(r.get("Nomor AWB/Resi", "")).strip(),
+                "last_seen_file": Path(path).name,
+                "last_seen_at": now_iso(),
+            }
+            action = upsert_line(conn, row)
+            inserted += action == "inserted"
+            updated += action == "updated"
+        conn.execute(
+            "INSERT INTO import_runs (filename, kind, store_name, rows_seen, inserted, updated, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (Path(path).name, "orders", selected_store or "sesuai file", len(df), inserted, updated, "Order Desty diperbarui", now_iso()),
+        )
+    return {"kind": "orders", "storeName": selected_store or "sesuai file", "rows": len(df), "inserted": inserted, "updated": updated}
+
+
+def import_settlement_csv(path, store_name=None):
+    selected_store = normalize_store(store_name) if store_name else DEFAULT_STORE
+    df = pd.read_csv(path)
+    df.columns = [clean_col(c) for c in df.columns]
+    inserted = updated = 0
+    with connect() as conn:
+        for _, r in df.iterrows():
+            order_id = str(r.get("Order ID", "")).replace(".0", "").strip()
+            sku = str(r.get("Seller SKU", "")).strip()
+            if not order_id or not sku:
+                continue
+            qty = float(rupiah(r.get("Quantity", 0)))
+            unit_price = float(rupiah(r.get("SKU Unit Original Price", 0)))
+            platform_fee = (
+                abs(float(rupiah(r.get("Buyer Service Fee", 0))))
+                + abs(float(rupiah(r.get("Handling Fee", 0))))
+                + abs(float(rupiah(r.get("Shipping Insurance", 0))))
+                + abs(float(rupiah(r.get("Item Insurance", 0))))
+            )
+            status = str(r.get("Order Status", "")).strip()
+            received = float(rupiah(r.get("Order Amount", 0))) if status.lower() in {"selesai", "completed"} else 0
+            row_store = selected_store or normalize_store(r.get("Warehouse Name", DEFAULT_STORE))
+            row = {
+                "line_key": line_key(row_store, order_id, sku, r.get("Variation", "")),
+                "order_id": order_id,
+                "store_name": row_store,
+                "source": "settlement",
+                "created_at": parse_dt(r.get("Created Time")),
+                "updated_at": parse_dt(r.get("Delivered Time") or r.get("Paid Time")),
+                "status": status,
+                "sku": sku,
+                "product_name": str(r.get("Product Name", "")).strip(),
+                "variation": str(r.get("Variation", "")).strip(),
+                "quantity": qty,
+                "unit_price": unit_price,
+                "gross_product": float(rupiah(r.get("SKU Subtotal After Discount", 0))),
+                "seller_discount": float(rupiah(r.get("SKU Seller Discount", 0))),
+                "platform_discount": float(rupiah(r.get("SKU Platform Discount", 0))) + float(rupiah(r.get("Payment platform discount", 0))),
+                "platform_fee": platform_fee,
+                "refund_amount": abs(float(rupiah(r.get("Order Refund Amount", 0)))),
+                "order_amount": float(rupiah(r.get("Order Amount", 0))),
+                "settlement_received": received,
+                "payment_method": str(r.get("Payment Method", "")).strip(),
+                "tracking_id": str(r.get("Tracking ID", "")).strip(),
+                "last_seen_file": Path(path).name,
+                "last_seen_at": now_iso(),
+            }
+            action = upsert_line(conn, row)
+            inserted += action == "inserted"
+            updated += action == "updated"
+        conn.execute(
+            "INSERT INTO import_runs (filename, kind, store_name, rows_seen, inserted, updated, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (Path(path).name, "settlement", selected_store, len(df), inserted, updated, "Pencairan/status marketplace diperbarui", now_iso()),
+        )
+    return {"kind": "settlement", "storeName": selected_store, "rows": len(df), "inserted": inserted, "updated": updated}
+
+
+def detect_and_import(path, kind="auto", store_name=DEFAULT_STORE):
+    kind = str(kind or "auto")
+    if kind == "sku":
+        return import_sku(path, store_name)
+    if kind in {"order", "orders"}:
+        return import_order_excel(path, store_name)
+    if kind in {"settlement", "pencairan"}:
+        return import_settlement_csv(path, store_name)
+    suffix = Path(path).suffix.lower()
+    if suffix == ".xlsx":
+        return import_order_excel(path, store_name)
+    df = pd.read_csv(path, nrows=1)
+    cols = set(clean_col(c) for c in df.columns)
+    if {"sku", "hppPerUnit", "packingPerUnit"}.issubset(cols):
+        return import_sku(path, store_name)
+    if "Order ID" in cols and "Seller SKU" in cols:
+        return import_settlement_csv(path, store_name)
+    raise ValueError("Format file belum dikenal. Upload order Desty, pencairan TikTok, atau template SKU.")
+
+
+def import_samples(store_name=DEFAULT_STORE):
+    results = []
+    for path in [SAMPLES["sku"], SAMPLES["orders"], SAMPLES["settlement"]]:
+        if path.exists():
+            results.append(detect_and_import(path, "auto", store_name))
+    return results
+
+
+def fetch_rows(store_name="all"):
+    store_name = normalize_store(store_name) if store_name and store_name != "all" else "all"
+    where = ""
+    params = []
+    if store_name != "all":
+        where = "WHERE lower(l.store_name)=lower(?)"
+        params.append(store_name)
+    with connect() as conn:
+        return conn.execute(
+            f"""
+            SELECT
+                l.*,
+                COALESCE(c_store.hpp_per_unit, c_global.hpp_per_unit, 0) hpp_per_unit,
+                COALESCE(c_store.packing_per_unit, c_global.packing_per_unit, 0) packing_per_unit
+            FROM order_lines l
+            LEFT JOIN sku_costs c_store
+                ON lower(c_store.store_name)=lower(l.store_name)
+                AND lower(c_store.sku)=lower(l.sku)
+            LEFT JOIN sku_costs c_global
+                ON lower(c_global.store_name)='global'
+                AND lower(c_global.sku)=lower(l.sku)
+            {where}
+            """,
+            params,
+        ).fetchall()
+
+
+def available_months():
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT month FROM (
+                SELECT substr(created_at, 1, 7) month
+                FROM order_lines
+                WHERE created_at IS NOT NULL AND created_at != ''
+                UNION
+                SELECT substr(spend_date, 1, 7) month
+                FROM ad_spend
+                WHERE spend_date IS NOT NULL AND spend_date != ''
+            )
+            GROUP BY month
+            ORDER BY month DESC
+            """
+        ).fetchall()
+    return [r["month"] for r in rows if r["month"]]
+
+
+def filtered_ad_spend(filters, start_date=None, end_date=None):
+    store_name = filters.get("store", "all")
+    where = []
+    params = []
+    if store_name != "all":
+        where.append("lower(store_name)=lower(?)")
+        params.append(normalize_store(store_name))
+    if start_date:
+        where.append("spend_date BETWEEN ? AND ?")
+        params.extend([start_date.isoformat(), end_date.isoformat()])
+    sql = "SELECT * FROM ad_spend"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY spend_date DESC, id DESC"
+    with connect() as conn:
+        rows = [dict(row) for row in conn.execute(sql, params).fetchall()]
+    return rows
+
+
+def save_ad_spend(data):
+    store_name = normalize_store(data.get("storeName", DEFAULT_STORE))
+    spend_date = str(data.get("spendDate") or date.today().isoformat())[:10]
+    amount = abs(float(rupiah(data.get("amount", 0))))
+    if amount <= 0:
+        raise ValueError("Nominal biaya iklan harus lebih dari 0.")
+    channel = str(data.get("channel", "TikTok Ads")).strip() or "TikTok Ads"
+    campaign = str(data.get("campaign", "")).strip()
+    note = str(data.get("note", "")).strip()
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO ad_spend (store_name, spend_date, amount, channel, campaign, note, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (store_name, spend_date, amount, channel, campaign, note, now_iso(), now_iso()),
+        )
+    return {"storeName": store_name, "spendDate": spend_date, "amount": amount, "channel": channel, "campaign": campaign}
+
+
+def delete_ad_spend(entry_id):
+    with connect() as conn:
+        conn.execute("DELETE FROM ad_spend WHERE id=?", (entry_id,))
+    return {"deleted": entry_id}
+
+
+def date_range_from_filters(filters):
+    preset = filters.get("preset", "all")
+    today = date.today()
+    if preset == "last7":
+        return today - timedelta(days=6), today
+    if preset == "last14":
+        return today - timedelta(days=13), today
+    if preset == "thisMonth":
+        return today.replace(day=1), today
+    if preset == "month" and filters.get("month"):
+        year, month = [int(part) for part in filters["month"].split("-")[:2]]
+        start = date(year, month, 1)
+        end = date(year + (month == 12), 1 if month == 12 else month + 1, 1) - timedelta(days=1)
+        return start, end
+    return None, None
+
+
+def build_filters(query=None):
+    query = query or {}
+    preset = query.get("preset", ["all"])[0] if isinstance(query.get("preset"), list) else query.get("preset", "all")
+    month = query.get("month", [""])[0] if isinstance(query.get("month"), list) else query.get("month", "")
+    store_name = query.get("store", ["all"])[0] if isinstance(query.get("store"), list) else query.get("store", "all")
+    if preset not in {"all", "last7", "last14", "thisMonth", "month"}:
+        preset = "all"
+    return {"preset": preset, "month": month, "store": normalize_store(store_name) if store_name != "all" else "all"}
+
+
+def compute_summary(filters=None):
+    filters = filters or {"preset": "all", "month": "", "store": "all"}
+    rows = fetch_rows(filters.get("store", "all"))
+    start_date, end_date = date_range_from_filters(filters)
+    groups = {}
+    for r in rows:
+        groups.setdefault(r["order_id"] or r["line_key"], []).append(r)
+    sku = {}
+    daily = {}
+    stores = {}
+    status = {}
+    missing_cost = set()
+    totals = {
+        "orders": set(), "lines": 0, "qty": 0, "gross": 0, "omzet": 0, "platformFee": 0,
+        "platformDiscount": 0, "hpp": 0, "packing": 0, "refund": 0, "settlement": 0, "held": 0,
+        "profit": 0, "profitBeforeAds": 0, "adSpend": 0, "todayOrders": 0,
+    }
+    today = date.today().isoformat()
+    for order_id, order_rows in groups.items():
+        first = order_rows[0]
+        created_day = (first["created_at"] or "")[:10] or "Tanpa tanggal"
+        if start_date and created_day != "Tanpa tanggal":
+            current_day = datetime.strptime(created_day, "%Y-%m-%d").date()
+            if current_day < start_date or current_day > end_date:
+                continue
+        if start_date and created_day == "Tanpa tanggal":
+            continue
+        gross_sum = sum(abs(float(r["gross_product"] or 0)) for r in order_rows)
+        order_total = max(abs(float(r["order_amount"] or 0)) for r in order_rows) or gross_sum
+        settlement_total = max(abs(float(r["settlement_received"] or 0)) for r in order_rows)
+        refund_total = max(abs(float(r["refund_amount"] or 0)) for r in order_rows)
+        platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in order_rows)
+        platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in order_rows)
+        cancelled = any(str(r["status"]).lower() in {"dibatalkan", "cancellations", "cancelled"} for r in order_rows)
+        totals["orders"].add(order_id)
+        totals["lines"] += len(order_rows)
+        totals["omzet"] += order_total
+        totals["gross"] += gross_sum
+        totals["platformFee"] += platform_fee_total
+        totals["platformDiscount"] += platform_discount_total
+        totals["refund"] += refund_total
+        totals["settlement"] += settlement_total
+        if not settlement_total and not cancelled:
+            totals["held"] += order_total
+        if created_day == today:
+            totals["todayOrders"] += 1
+        daily.setdefault(created_day, {"date": created_day, "orders": set(), "omzet": 0, "profit": 0})
+        daily[created_day]["orders"].add(order_id)
+        daily[created_day]["omzet"] += order_total
+        store = first["store_name"] or "TikTok"
+        stores.setdefault(store, {"store": store, "orders": set(), "omzet": 0, "profit": 0})
+        stores[store]["orders"].add(order_id)
+        stores[store]["omzet"] += order_total
+        for r in order_rows:
+            qty = float(r["quantity"] or 0)
+            line_gross = abs(float(r["gross_product"] or 0))
+            share = (line_gross / gross_sum) if gross_sum else (1 / len(order_rows))
+            omzet = order_total * share
+            platform_fee = platform_fee_total * share
+            refund = refund_total * share
+            hpp = qty * float(r["hpp_per_unit"] or 0)
+            packing = qty * float(r["packing_per_unit"] or 0)
+            profit = omzet - platform_fee - refund - hpp - packing
+            totals["qty"] += qty
+            totals["hpp"] += hpp
+            totals["packing"] += packing
+            totals["profit"] += profit
+            daily[created_day]["profit"] += profit
+            stores[store]["profit"] += profit
+            if qty and not (r["hpp_per_unit"] or r["packing_per_unit"]):
+                missing_cost.add(r["sku"])
+            key = r["sku"] or "Tanpa SKU"
+            sku.setdefault(
+                key,
+                {
+                    "sku": key,
+                    "product": r["product_name"],
+                    "qty": 0,
+                    "orders": set(),
+                    "stores": set(),
+                    "omzet": 0,
+                    "profit": 0,
+                    "profitBeforeAds": 0,
+                    "hpp": 0,
+                    "packing": 0,
+                    "platformFee": 0,
+                    "refund": 0,
+                    "adSpend": 0,
+                    "missingCost": False,
+                },
+            )
+            sku[key]["qty"] += qty
+            sku[key]["orders"].add(order_id)
+            sku[key]["stores"].add(store)
+            sku[key]["omzet"] += omzet
+            sku[key]["profit"] += profit
+            sku[key]["hpp"] += hpp
+            sku[key]["packing"] += packing
+            sku[key]["platformFee"] += platform_fee
+            sku[key]["refund"] += refund
+            if qty and not (r["hpp_per_unit"] or r["packing_per_unit"]):
+                sku[key]["missingCost"] = True
+            status[r["status"] or "Tanpa status"] = status.get(r["status"] or "Tanpa status", 0) + 1
+    ad_rows = filtered_ad_spend(filters, start_date, end_date)
+    ad_by_store = {}
+    for expense in ad_rows:
+        amount = float(expense["amount"] or 0)
+        totals["adSpend"] += amount
+        spend_day = expense["spend_date"] or "Tanpa tanggal"
+        daily.setdefault(spend_day, {"date": spend_day, "orders": set(), "omzet": 0, "profit": 0})
+        daily[spend_day]["profit"] -= amount
+        store = expense["store_name"] or DEFAULT_STORE
+        stores.setdefault(store, {"store": store, "orders": set(), "omzet": 0, "profit": 0})
+        stores[store]["profit"] -= amount
+        ad_by_store[store] = ad_by_store.get(store, 0) + amount
+    totals["profitBeforeAds"] = totals["profit"]
+    totals["profit"] -= totals["adSpend"]
+    order_count = len(totals["orders"])
+    margin = (totals["profit"] / totals["omzet"] * 100) if totals["omzet"] else 0
+    daily_list = []
+    for item in daily.values():
+        item["orders"] = len(item["orders"])
+        daily_list.append(item)
+    store_list = []
+    for item in stores.values():
+        item["orders"] = len(item["orders"])
+        store_list.append(item)
+    for store in read_config().get("stores", DEFAULT_STORES):
+        if not any(item["store"] == store for item in store_list):
+            store_list.append({"store": store, "orders": 0, "omzet": 0, "profit": 0})
+    sku_details = []
+    for item in sku.values():
+        item["orders"] = len(item["orders"])
+        item["stores"] = sorted(item["stores"])
+        item["profitBeforeAds"] = item["profit"]
+        item["adSpend"] = (totals["adSpend"] * item["omzet"] / totals["omzet"]) if totals["omzet"] else 0
+        item["profit"] = item["profitBeforeAds"] - item["adSpend"]
+        item["costTotal"] = item["hpp"] + item["packing"] + item["platformFee"] + item["refund"] + item["adSpend"]
+        item["margin"] = (item["profit"] / item["omzet"] * 100) if item["omzet"] else 0
+        item["aov"] = (item["omzet"] / item["orders"]) if item["orders"] else 0
+        if item["missingCost"]:
+            item["status"] = "HPP belum lengkap"
+            item["statusLevel"] = "warn"
+        elif item["profit"] < 0:
+            item["status"] = "Rugi"
+            item["statusLevel"] = "bad"
+        elif item["margin"] < 10:
+            item["status"] = "Kurang bagus"
+            item["statusLevel"] = "bad"
+        elif item["margin"] < 20:
+            item["status"] = "Perlu dipantau"
+            item["statusLevel"] = "watch"
+        else:
+            item["status"] = "Penghasil"
+            item["statusLevel"] = "good"
+        sku_details.append(item)
+    reliable_sku = [item for item in sku_details if not item["missingCost"]]
+    top_sku = sorted(reliable_sku or sku_details, key=lambda x: x["profit"], reverse=True)[:12]
+    weak_priority = {"bad": 0, "warn": 1, "watch": 2, "good": 3}
+    weak_sku = sorted(sku_details, key=lambda x: (weak_priority.get(x["statusLevel"], 4), x["profit"]))[:8]
+    sku_summary = {
+        "total": len(sku_details),
+        "profitable": sum(1 for item in sku_details if item["statusLevel"] == "good"),
+        "watch": sum(1 for item in sku_details if item["statusLevel"] == "watch"),
+        "bad": sum(1 for item in sku_details if item["statusLevel"] == "bad"),
+        "missingCost": sum(1 for item in sku_details if item["missingCost"]),
+        "best": top_sku[0] if top_sku else None,
+        "weakest": weak_sku[0] if weak_sku else None,
+    }
+    recent_runs = []
+    with connect() as conn:
+        for r in conn.execute("SELECT * FROM import_runs ORDER BY id DESC LIMIT 8").fetchall():
+            recent_runs.append(dict(r))
+    alerts = []
+    if totals["profit"] < 0:
+        alerts.append({"level": "danger", "title": "Profit total negatif", "body": "Perlu cek HPP, potongan, dan SKU rugi."})
+    if totals["omzet"] and margin < 12:
+        alerts.append({"level": "warn", "title": "Margin tipis", "body": f"Margin bersih sementara {margin:.1f}%."})
+    if totals["adSpend"] and totals["omzet"] and totals["adSpend"] / totals["omzet"] > 0.2:
+        alerts.append({"level": "warn", "title": "Biaya iklan tinggi", "body": "Biaya iklan lebih dari 20% omset periode ini."})
+    if missing_cost:
+        alerts.append({"level": "warn", "title": "Ada SKU tanpa HPP", "body": f"{len(missing_cost)} SKU belum punya HPP/packing."})
+    assistant = build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
+    return {
+        "generatedAt": now_iso(),
+        "totals": {**totals, "orders": order_count, "margin": margin},
+        "daily": sorted(daily_list, key=lambda x: x["date"])[-30:],
+        "topSku": top_sku,
+        "weakSku": weak_sku,
+        "skuDetails": sorted(sku_details, key=lambda x: x["profit"], reverse=True),
+        "skuSummary": sku_summary,
+        "stores": sorted(store_list, key=lambda x: x["omzet"], reverse=True),
+        "status": [{"status": k, "count": v} for k, v in sorted(status.items(), key=lambda x: x[1], reverse=True)],
+        "missingCost": sorted(missing_cost)[:30],
+        "alerts": alerts,
+        "assistant": assistant,
+        "filters": {
+            **filters,
+            "startDate": start_date.isoformat() if start_date else "",
+            "endDate": end_date.isoformat() if end_date else "",
+        },
+        "availableMonths": available_months(),
+        "availableStores": read_config().get("stores", DEFAULT_STORES),
+        "adSpendRows": ad_rows[:12],
+        "runs": recent_runs,
+    }
+
+
+def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list):
+    omzet = float(totals["omzet"] or 0)
+    profit = float(totals["profit"] or 0)
+    held = float(totals["held"] or 0)
+    hpp_total = float(totals["hpp"] or 0) + float(totals["packing"] or 0)
+    refund = float(totals["refund"] or 0)
+    platform_fee = float(totals["platformFee"] or 0)
+    ad_spend = float(totals["adSpend"] or 0)
+    held_ratio = held / omzet * 100 if omzet else 0
+    refund_ratio = refund / omzet * 100 if omzet else 0
+    fee_ratio = platform_fee / omzet * 100 if omzet else 0
+    ad_ratio = ad_spend / omzet * 100 if omzet else 0
+    score = 70
+    if margin >= 30:
+        score += 15
+    elif margin < 15:
+        score -= 20
+    if held_ratio > 40:
+        score -= 12
+    if refund_ratio > 10:
+        score -= 10
+    if ad_ratio > 20:
+        score -= 10
+    if missing_cost:
+        score -= 12
+    score = max(0, min(100, score))
+    avg_daily = sum(float(d.get("omzet", 0)) for d in daily_list[-14:]) / max(len(daily_list[-14:]), 1)
+    forecast_30 = avg_daily * 30
+    forecast_profit = forecast_30 * (margin / 100) if omzet else 0
+    insights = []
+    actions = []
+    if margin >= 30:
+        insights.append(f"Margin estimasi kuat di {margin:.1f}%. Bisnis terlihat sehat, selama HPP semua SKU sudah lengkap.")
+    elif margin >= 15:
+        insights.append(f"Margin estimasi sedang di {margin:.1f}%. Masih sehat, tapi ruang salah harga dan promo mulai sempit.")
+    else:
+        insights.append(f"Margin estimasi tipis di {margin:.1f}%. Ini perlu dipantau sebelum menaikkan budget iklan atau diskon.")
+    if held_ratio > 30:
+        insights.append(f"Dana tertahan sekitar {held_ratio:.1f}% dari omset terdata. Arus kas perlu dicek dari order yang belum cair.")
+        actions.append("Prioritaskan cek order belum selesai/cair supaya kas harian tidak terlihat semu.")
+    if refund_ratio > 8:
+        insights.append(f"Refund cukup tinggi, sekitar {refund_ratio:.1f}% dari omset. Ini bisa menggerus profit nyata.")
+        actions.append("Audit SKU dengan refund tertinggi dan cek penyebab retur/cancel.")
+    if fee_ratio > 8:
+        actions.append("Cek potongan platform dan promo, terutama jika biaya platform naik tanpa kenaikan order.")
+    if ad_spend:
+        insights.append(f"Biaya iklan tercatat {ad_ratio:.1f}% dari omset periode ini.")
+        if ad_ratio > 20:
+            actions.append("Turunkan atau evaluasi campaign iklan yang ROAS/profit SKU-nya belum jelas.")
+    if missing_cost:
+        actions.append(f"Lengkapi HPP untuk {len(missing_cost)} SKU agar profit tidak terlalu optimistis.")
+    if top_sku:
+        actions.append(f"SKU {top_sku[0]['sku']} paling produktif. Pastikan stok, bahan, dan kapasitas produksi aman.")
+    if weak_sku:
+        actions.append(f"SKU {weak_sku[0]['sku']} perlu dicek harga, HPP, promo, atau kualitas traffic.")
+    return {
+        "score": score,
+        "health": "Sehat" if score >= 75 else "Perlu Dipantau" if score >= 55 else "Butuh Tindakan",
+        "forecast30Omzet": forecast_30,
+        "forecast30Profit": forecast_profit,
+        "accounting": {
+            "pendapatan": omzet,
+            "hppPacking": hpp_total,
+            "potonganPlatform": platform_fee,
+            "biayaIklan": ad_spend,
+            "refund": refund,
+            "profitEstimasi": profit,
+        },
+        "insights": insights,
+        "actions": actions[:6],
+    }
+
+
+def telegram_message(summary):
+    t = summary["totals"]
+    top = summary["topSku"][0] if summary["topSku"] else {"sku": "-", "profit": 0}
+    weak = summary["weakSku"][0] if summary["weakSku"] else {"sku": "-", "profit": 0}
+    alerts = "\n".join([f"- {a['title']}: {a['body']}" for a in summary["alerts"]]) or "- Tidak ada alert besar"
+    return (
+        "Ringkasan Keuangan TikTok\n"
+        f"Waktu: {summary['generatedAt']}\n\n"
+        f"Order unik: {t['orders']}\n"
+        f"Omset terdata: Rp{rupiah(t['omzet']):,}\n"
+        f"Dana tertahan estimasi: Rp{rupiah(t['held']):,}\n"
+        f"Pencairan terdata: Rp{rupiah(t['settlement']):,}\n"
+        f"Potongan platform: Rp{rupiah(t['platformFee']):,}\n"
+        f"HPP + packing: Rp{rupiah(t['hpp'] + t['packing']):,}\n"
+        f"Biaya iklan: Rp{rupiah(t.get('adSpend', 0)):,}\n"
+        f"Profit estimasi: Rp{rupiah(t['profit']):,} ({t['margin']:.1f}%)\n\n"
+        f"SKU profit tertinggi: {top['sku']} Rp{rupiah(top['profit']):,}\n"
+        f"SKU perlu dicek: {weak['sku']} Rp{rupiah(weak['profit']):,}\n\n"
+        f"Alert:\n{alerts}"
+    ).replace(",", ".")
+
+
+def send_telegram(text):
+    cfg = read_config()
+    token = cfg.get("telegramBotToken", "").strip()
+    chat_id = cfg.get("telegramChatId", "").strip()
+    if not token or not chat_id:
+        raise ValueError("Telegram Bot Token dan Chat ID belum diisi.")
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    data = urllib.parse.urlencode({"chat_id": chat_id, "text": text}).encode()
+    with urllib.request.urlopen(url, data=data, timeout=15) as resp:
+        return json.loads(resp.read().decode())
+
+
+def scan_folder_once(folder_config):
+    folder = Path(folder_config.get("path", "")).expanduser()
+    if not folder.exists() or not folder.is_dir():
+        return {"ok": False, "message": "Folder tidak ditemukan.", "results": []}
+    state = dict(folder_config.get("fileState") or {})
+    results = []
+    for path in sorted(folder.iterdir()):
+        if path.suffix.lower() not in {".csv", ".xlsx"} or path.name.startswith("~$"):
+            continue
+        stat = path.stat()
+        signature = f"{int(stat.st_mtime)}:{stat.st_size}"
+        if state.get(str(path)) == signature:
+            continue
+        results.append(detect_and_import(path, folder_config.get("kind", "auto"), folder_config.get("storeName", DEFAULT_STORE)))
+        state[str(path)] = signature
+    folder_config["fileState"] = state
+    folder_config["lastRun"] = now_iso()
+    folder_config["lastMessage"] = f"{len(results)} file baru/berubah diproses" if results else "Tidak ada file baru"
+    return {"ok": True, "message": folder_config["lastMessage"], "results": results}
+
+
+def run_folder_monitor(force=False):
+    cfg = read_config()
+    monitor = cfg.get("folderMonitor", {})
+    if not force and not monitor.get("enabled"):
+        return {"ok": True, "message": "Monitor folder belum aktif", "results": []}
+    last_run = monitor.get("lastRun")
+    interval = int(monitor.get("intervalMinutes") or 10)
+    if not force and last_run:
+        last_dt = datetime.strptime(last_run, "%Y-%m-%d %H:%M:%S")
+        if datetime.now() - last_dt < timedelta(minutes=interval):
+            return {"ok": True, "message": "Belum waktunya scan berikutnya", "results": []}
+    result = scan_folder_once(monitor)
+    cfg["folderMonitor"] = monitor
+    write_config(cfg)
+    return result
+
+
+def scheduler_loop():
+    while True:
+        try:
+            cfg = read_config()
+            current = datetime.now().strftime("%H:%M")
+            today = date.today().isoformat()
+            run_folder_monitor(force=False)
+            if current == cfg.get("morningTime", "07:30") and cfg.get("lastMorningSent") != today:
+                summary = compute_summary()
+                send_telegram(telegram_message(summary))
+                cfg["lastMorningSent"] = today
+                write_config(cfg)
+            time.sleep(30)
+        except Exception:
+            time.sleep(60)
+
+
+class AppHandler(BaseHTTPRequestHandler):
+    def log_message(self, fmt, *args):
+        return
+
+    def send_json(self, data, status=200):
+        payload = json.dumps(data, ensure_ascii=False).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def send_file(self, path, content_type):
+        payload = Path(path).read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        parsed = urllib.parse.urlparse(self.path)
+        route = parsed.path
+        query = urllib.parse.parse_qs(parsed.query)
+        if route in {"/", "/owner", "/tv"}:
+            return self.send_file(ROOT / "static" / "index.html", "text/html; charset=utf-8")
+        if route == "/static/styles.css":
+            return self.send_file(ROOT / "static" / "styles.css", "text/css; charset=utf-8")
+        if route == "/static/app.js":
+            return self.send_file(ROOT / "static" / "app.js", "application/javascript; charset=utf-8")
+        if route == "/api/summary":
+            return self.send_json(compute_summary(build_filters(query)))
+        if route == "/api/config":
+            cfg = read_config()
+            cfg["telegramBotToken"] = "••••••" if cfg.get("telegramBotToken") else ""
+            return self.send_json(cfg)
+        self.send_error(404)
+
+    def do_POST(self):
+        route = urllib.parse.urlparse(self.path).path
+        try:
+            if route == "/api/import-samples":
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
+                store_name = body.get("storeName", DEFAULT_STORE)
+                return self.send_json({"ok": True, "results": import_samples(store_name), "summary": compute_summary()})
+            if route == "/api/config":
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode())
+                current = read_config()
+                for key in ["telegramChatId", "morningTime", "alertNegativeProfit", "alertMarginBelow", "defaultStore", "stores"]:
+                    if key in body:
+                        current[key] = body[key]
+                if body.get("telegramBotToken") and body.get("telegramBotToken") != "••••••":
+                    current["telegramBotToken"] = body["telegramBotToken"]
+                write_config(current)
+                return self.send_json({"ok": True})
+            if route == "/api/folder-monitor":
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode())
+                current = read_config()
+                monitor = current.get("folderMonitor", {})
+                for key in ["enabled", "path", "intervalMinutes", "storeName", "kind"]:
+                    if key in body:
+                        monitor[key] = body[key]
+                monitor["storeName"] = normalize_store(monitor.get("storeName", DEFAULT_STORE))
+                current["folderMonitor"] = monitor
+                write_config(current)
+                return self.send_json({"ok": True, "folderMonitor": monitor})
+            if route == "/api/folder-run":
+                result = run_folder_monitor(force=True)
+                return self.send_json({"ok": True, **result, "summary": compute_summary()})
+            if route == "/api/ad-spend":
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode())
+                result = save_ad_spend(body)
+                return self.send_json({"ok": True, "result": result, "summary": compute_summary()})
+            if route == "/api/telegram-test":
+                summary = compute_summary()
+                result = send_telegram(telegram_message(summary))
+                return self.send_json({"ok": True, "result": result})
+            if route == "/api/upload":
+                return self.handle_upload()
+            self.send_error(404)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 500)
+
+    def handle_upload(self):
+        content_type = self.headers.get("Content-Type", "")
+        boundary = content_type.split("boundary=")[-1].encode()
+        if not boundary or b"multipart/form-data" not in content_type.encode():
+            raise ValueError("Upload harus multipart/form-data.")
+        raw = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+        marker = b"--" + boundary
+        results = []
+        fields = {}
+        files = []
+        for part in raw.split(marker):
+            if b"Content-Disposition" not in part or b"\r\n\r\n" not in part:
+                continue
+            header, filedata = part.split(b"\r\n\r\n", 1)
+            filedata = filedata.rsplit(b"\r\n", 1)[0]
+            header_text = header.decode(errors="ignore")
+            name = header_text.split('name="', 1)[1].split('"', 1)[0] if 'name="' in header_text else ""
+            if "filename=" not in header_text:
+                fields[name] = filedata.decode(errors="ignore")
+                continue
+            filename = header_text.split('filename="', 1)[1].split('"', 1)[0]
+            if not filename:
+                continue
+            safe_name = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{Path(filename).name}"
+            dest = UPLOAD_DIR / safe_name
+            dest.write_bytes(filedata)
+            files.append(dest)
+        kind = fields.get("kind", "auto")
+        store_name = fields.get("storeName", DEFAULT_STORE)
+        for dest in files:
+            results.append(detect_and_import(dest, kind, store_name))
+        return self.send_json({"ok": True, "results": results, "summary": compute_summary()})
+
+
+def main():
+    ensure_dirs()
+    init_db()
+    if not CONFIG_PATH.exists():
+        write_config(read_config())
+    threading.Thread(target=scheduler_loop, daemon=True).start()
+    port = int(os.environ.get("PORT", "8787"))
+    server = ThreadingHTTPServer(("127.0.0.1", port), AppHandler)
+    print(f"Dashboard siap: http://127.0.0.1:{port}")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
