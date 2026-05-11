@@ -11,6 +11,12 @@ Aplikasi lokal untuk memantau omset, dana tertahan, potongan platform, HPP, prof
 /Users/djokoriwanto/.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3 app.py
 ```
 
+Jika menjalankan di Python baru yang belum punya library spreadsheet, install dependency lokal:
+
+```bash
+pip install -r requirements-local.txt
+```
+
 3. Buka dashboard:
 
 ```text
