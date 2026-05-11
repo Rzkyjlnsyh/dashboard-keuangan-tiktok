@@ -1,4 +1,5 @@
 const routeRole = location.pathname.includes("tv") ? "tv" : location.pathname.includes("team") ? "team" : "owner";
+const isCloudPreview = !["127.0.0.1", "localhost", ""].includes(location.hostname) && location.protocol !== "file:";
 const state = {
   view: routeRole === "tv" ? "tv" : routeRole === "team" ? "team" : "owner",
   accessRole: routeRole,
@@ -26,6 +27,32 @@ const monthLabel = (value) => {
   const [year, month] = value.split("-");
   return `${monthNames[Number(month) - 1]} ${year}`;
 };
+const escapeHtml = (value) => String(value || "").replace(/[&<>"']/g, char => ({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  '"': "&quot;",
+  "'": "&#39;",
+}[char]));
+
+function showNotice(message, level = "warn", popup = true) {
+  const text = message || "Terjadi kesalahan.";
+  if (el("alerts")) {
+    el("alerts").innerHTML = `
+      <div class="alert ${level}">
+        <strong>Perhatian</strong>
+        <div>${escapeHtml(text)}</div>
+      </div>
+    ` + el("alerts").innerHTML;
+  }
+  if (popup) window.alert(text);
+}
+
+function cloudBlocked(action) {
+  if (!isCloudPreview) return false;
+  showNotice(`${action} belum bisa membaca folder laptop dari Vercel. Untuk online, upload file langsung di dashboard Vercel; untuk auto-folder 5-10 menit kita butuh worker lokal yang mengirim file Desty ke Supabase.`);
+  return true;
+}
 
 function setView(view) {
   state.view = view;
@@ -33,6 +60,7 @@ function setView(view) {
   document.body.classList.toggle("tv", view === "tv");
   document.body.classList.toggle("team", view === "team");
   document.body.classList.toggle("restricted", state.accessRole !== "owner");
+  document.body.classList.toggle("cloud-preview", isCloudPreview);
   document.querySelectorAll("[data-owner-only]").forEach(btn => btn.hidden = routeRole !== "owner");
   document.querySelectorAll("nav button").forEach(btn => btn.classList.toggle("active", btn.dataset.view === view));
   document.querySelectorAll("[data-show]").forEach(section => {
@@ -66,7 +94,12 @@ function withOwnerPin(options = {}) {
 
 async function api(path, options, retryOwnerPin = true) {
   const res = await fetch(path, withOwnerPin(options || {}));
-  const data = await res.json();
+  let data;
+  try {
+    data = await res.json();
+  } catch (error) {
+    throw new Error("Server belum mengirim jawaban yang bisa dibaca. Coba refresh halaman atau gunakan dashboard lokal.");
+  }
   if (res.status === 401 && data.ownerLocked && retryOwnerPin && state.accessRole === "owner") {
     const pin = window.prompt("Masukkan PIN Owner");
     if (pin) {
@@ -459,56 +492,101 @@ el("folderStore").addEventListener("change", (event) => {
 el("refreshBtn").addEventListener("click", refresh);
 el("jumpUploadBtn").addEventListener("click", () => { setView("ops"); el("uploadPanel").scrollIntoView({ behavior: "smooth" }); });
 el("sampleBtn").addEventListener("click", async () => {
+  if (isCloudPreview) {
+    showNotice("Di Vercel kita pakai data real dari upload, bukan data contoh. Pilih Upload Data lalu masukkan file SKU, order, atau pencairan.");
+    return;
+  }
   const storeName = el("uploadStore").value || "ventura";
-  await api("/api/import-samples", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storeName }) });
-  await refresh();
+  try {
+    await api("/api/import-samples", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storeName }) });
+    await refresh();
+  } catch (err) {
+    showNotice(err.message);
+  }
 });
 document.getElementById("uploadForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const fd = new FormData(event.target);
-  await api("/api/upload", { method: "POST", body: fd });
-  el("fileInput").value = "";
-  await refresh();
-  setView("owner");
+  try {
+    if (isCloudPreview) {
+      if (!window.CloudFinance) throw new Error("Mode upload online belum siap. Refresh halaman Vercel lalu coba lagi.");
+      await window.CloudFinance.uploadForm(event.target, api, showNotice);
+    } else {
+      const fd = new FormData(event.target);
+      await api("/api/upload", { method: "POST", body: fd });
+    }
+    el("fileInput").value = "";
+    await refresh();
+    setView("owner");
+    showNotice(isCloudPreview ? "Upload selesai dan data tersimpan ke Supabase." : "Upload selesai dan dashboard diperbarui.", "info");
+  } catch (err) {
+    showNotice(err.message);
+  }
 });
 document.getElementById("folderForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (cloudBlocked("Auto update folder")) return;
   const data = Object.fromEntries(new FormData(event.target).entries());
   data.enabled = event.target.elements.enabled.checked;
   state.folderStore = data.storeName || state.folderStore;
-  await api("/api/folder-monitor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
-  await loadConfig();
+  try {
+    await api("/api/folder-monitor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    await loadConfig();
+  } catch (err) {
+    showNotice(err.message);
+  }
 });
 document.getElementById("adSpendForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target).entries());
-  await api("/api/ad-spend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
-  event.target.elements.amount.value = "";
-  event.target.elements.campaign.value = "";
-  event.target.elements.note.value = "";
-  await refresh();
+  try {
+    await api("/api/ad-spend", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    event.target.elements.amount.value = "";
+    event.target.elements.campaign.value = "";
+    event.target.elements.note.value = "";
+    await refresh();
+  } catch (err) {
+    showNotice(err.message);
+  }
 });
 el("folderRun").addEventListener("click", async () => {
-  const result = await api("/api/folder-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storeName: el("folderStore").value }) });
-  el("folderStatus").textContent = result.message;
-  await loadConfig();
-  await refresh();
+  if (cloudBlocked("Scan folder")) return;
+  try {
+    const result = await api("/api/folder-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storeName: el("folderStore").value }) });
+    el("folderStatus").textContent = result.message;
+    await loadConfig();
+    await refresh();
+  } catch (err) {
+    showNotice(err.message);
+  }
 });
 el("folderRunAll").addEventListener("click", async () => {
-  const result = await api("/api/folder-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storeName: "all" }) });
-  el("folderStatus").textContent = result.message;
-  await loadConfig();
-  await refresh();
+  if (cloudBlocked("Scan semua toko")) return;
+  try {
+    const result = await api("/api/folder-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storeName: "all" }) });
+    el("folderStatus").textContent = result.message;
+    await loadConfig();
+    await refresh();
+  } catch (err) {
+    showNotice(err.message);
+  }
 });
 document.getElementById("configForm").addEventListener("submit", async (event) => {
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target).entries());
-  await api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
-  alert("Pengaturan Telegram disimpan.");
+  try {
+    await api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
+    alert("Pengaturan Telegram disimpan.");
+  } catch (err) {
+    showNotice(err.message);
+  }
 });
 el("telegramTest").addEventListener("click", async () => {
-  await api("/api/telegram-test", { method: "POST" });
-  alert("Ringkasan tes dikirim ke Telegram.");
+  try {
+    await api("/api/telegram-test", { method: "POST" });
+    alert("Ringkasan tes dikirim ke Telegram.");
+  } catch (err) {
+    showNotice(err.message);
+  }
 });
 
 setView(state.view);

@@ -15,4 +15,4 @@ logs/
 
 # Vercel local metadata
 .vercel/
-
+public/

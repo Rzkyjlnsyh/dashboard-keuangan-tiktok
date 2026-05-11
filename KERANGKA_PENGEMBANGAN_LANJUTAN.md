@@ -98,6 +98,6 @@ Pengembangan berikutnya:
 
 ## Catatan Arsitektur
 
-- Versi lokal tetap menjadi pusat data real karena membaca folder dan database lokal.
-- Vercel preview harus tetap aman dan tidak membawa database toko.
-- Jika nanti ingin cloud dashboard penuh, perlu storage terpisah, autentikasi owner/tim yang lebih kuat, dan strategi upload otomatis yang tidak bergantung pada file lokal.
+- Versi online memakai Supabase untuk data upload manual, biaya iklan, summary owner/tim/TV, audit, dan Telegram test.
+- Vercel tidak bisa membaca folder laptop secara langsung; auto update folder perlu worker lokal/server kecil yang membaca folder Desty lalu mengirim data ke Supabase.
+- Fase berikutnya: autentikasi owner/tim yang lebih kuat, worker auto-folder, dan rekonsiliasi order/pencairan berbasis data cloud.

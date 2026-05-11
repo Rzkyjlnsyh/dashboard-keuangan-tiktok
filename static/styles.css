@@ -170,6 +170,7 @@ select, input[type="month"], input[type="file"] {
 .alert { border: 1px solid var(--line); border-left: 4px solid var(--gold); border-radius: 8px; padding: 14px; background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.02)); box-shadow: 0 12px 30px rgba(0,0,0,.18); }
 .alert.danger { border-left-color: var(--red); }
 .alert.warn { border-left-color: var(--gold); }
+.alert.info { border-left-color: var(--blue); }
 .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 14px; margin: 18px 0; }
 .kpis article, .panel {
   background:

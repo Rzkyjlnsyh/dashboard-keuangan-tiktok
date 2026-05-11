@@ -25,6 +25,35 @@ http://127.0.0.1:8787
 
 Jangan buka file `static/index.html` langsung dari Finder/browser, karena itu hanya file mentah dan tidak bisa membaca data dashboard. Jika ingin cara paling mudah, buka `run_dashboard.command`, lalu buka alamat dashboard di atas.
 
+## Versi online Vercel + Supabase
+
+Dashboard Vercel sekarang bisa memakai Supabase agar data upload, biaya iklan, summary owner/tim/TV, dan Telegram test berjalan online.
+
+Setup sekali:
+
+1. Buka Supabase SQL Editor, lalu jalankan isi file `supabase/schema.sql`.
+2. Di Vercel Project Settings -> Environment Variables, isi:
+
+```text
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+```
+
+Opsional untuk cron Telegram:
+
+```text
+CRON_SECRET=isi-random-yang-kuat
+```
+
+3. Deploy ulang dari GitHub/Vercel.
+4. Buka link Vercel, masuk `Upload & Otomatis`, lalu upload file SKU/order/pencairan.
+
+Catatan penting:
+
+- `SUPABASE_SERVICE_ROLE_KEY` hanya boleh disimpan di Vercel Environment Variables, jangan dimasukkan ke frontend atau commit repo.
+- Upload manual dan biaya iklan sudah online lewat Supabase.
+- Auto update folder tetap butuh worker lokal/server yang punya akses ke folder download Desty, karena Vercel tidak bisa membaca folder laptop secara langsung.
+
 ## Alur data
 
 - Pilih toko saat upload: `ventura`, `giftyours`, atau `custombase`.
