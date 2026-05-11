@@ -43,6 +43,17 @@
           <h1 id="pageTitle">Owner Dashboard</h1>
           <p id="pageSub">Profit, dana tertahan, potongan, HPP, dan SKU yang perlu diperhatikan.</p>
         </div>
+        <div class="hero-metrics secret" aria-label="Ringkasan kesehatan bisnis">
+          <div class="score-ring" id="heroRing">
+            <strong id="heroScore">0</strong>
+            <span>Health</span>
+          </div>
+          <div>
+            <span>Status</span>
+            <strong id="heroHealth">Menunggu Data</strong>
+            <em id="heroForecast">Forecast Rp0</em>
+          </div>
+        </div>
         <div class="hero-actions">
           <button id="sampleBtn">Impor Data Contoh</button>
           <button id="jumpUploadBtn">Upload Data</button>
@@ -67,15 +78,15 @@
       <section id="alerts" class="alerts" data-show="owner,team,tv,ops"></section>
 
       <section class="kpis" data-show="owner,team,tv">
-        <article><span>Order Unik</span><strong id="orders">0</strong><em id="todayOrders">Hari ini 0</em></article>
-        <article><span>Omset Terdata</span><strong id="omzet">Rp0</strong><em>Net dari data upload</em></article>
-        <article class="secret"><span>Profit Total Estimasi</span><strong id="profit">Rp0</strong><em id="margin">0%</em></article>
-        <article class="secret"><span>Profit Final</span><strong id="finalProfit">Rp0</strong><em id="finalProfitMeta">0 order final</em></article>
-        <article class="secret"><span>Profit Belum Final</span><strong id="estimatedProfit">Rp0</strong><em id="estimatedProfitMeta">0 order belum final</em></article>
-        <article><span>Dana Tertahan</span><strong id="held">Rp0</strong><em id="heldMeta">Belum cair / belum selesai</em></article>
-        <article class="secret"><span>Potongan Platform</span><strong id="platformFee">Rp0</strong><em>Fee terdeteksi</em></article>
-        <article class="secret"><span>Biaya Iklan</span><strong id="adSpend">Rp0</strong><em>Manual per toko</em></article>
-        <article class="secret"><span>HPP + Packing</span><strong id="hpp">Rp0</strong><em>Dari template SKU</em></article>
+        <article data-icon="O"><span>Order Unik</span><strong id="orders">0</strong><em id="todayOrders">Hari ini 0</em></article>
+        <article data-icon="Rp"><span>Omset Terdata</span><strong id="omzet">Rp0</strong><em>Net dari data upload</em></article>
+        <article class="secret" data-icon="%"><span>Profit Total Estimasi</span><strong id="profit">Rp0</strong><em id="margin">0%</em></article>
+        <article class="secret" data-icon="F"><span>Profit Final</span><strong id="finalProfit">Rp0</strong><em id="finalProfitMeta">0 order final</em></article>
+        <article class="secret" data-icon="E"><span>Profit Belum Final</span><strong id="estimatedProfit">Rp0</strong><em id="estimatedProfitMeta">0 order belum final</em></article>
+        <article data-icon="T"><span>Dana Tertahan</span><strong id="held">Rp0</strong><em id="heldMeta">Belum cair / belum selesai</em></article>
+        <article class="secret" data-icon="-"><span>Potongan Platform</span><strong id="platformFee">Rp0</strong><em>Fee terdeteksi</em></article>
+        <article class="secret" data-icon="A"><span>Biaya Iklan</span><strong id="adSpend">Rp0</strong><em>Manual per toko</em></article>
+        <article class="secret" data-icon="H"><span>HPP + Packing</span><strong id="hpp">Rp0</strong><em>Dari template SKU</em></article>
       </section>
 
       <section class="grid" data-show="owner,team,tv">

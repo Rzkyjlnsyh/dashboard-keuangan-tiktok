@@ -168,6 +168,10 @@ function renderAlerts(alerts) {
 
 function renderAssistant(assistant) {
   el("healthScore").textContent = `${assistant.score}/100`;
+  el("heroScore").textContent = Math.round(Number(assistant.score || 0));
+  el("heroHealth").textContent = assistant.health || "Menunggu Data";
+  el("heroForecast").textContent = `Forecast ${fmtCompact(assistant.forecast30Omzet || 0)}`;
+  el("heroRing").style.setProperty("--score", Math.max(0, Math.min(100, Number(assistant.score || 0))) + "%");
   el("forecastOmzet").textContent = fmtCompact(assistant.forecast30Omzet);
   el("forecastProfit").textContent = fmtCompact(assistant.forecast30Profit);
   const insights = assistant.insights.map(x => `<li>${x}</li>`).join("");
