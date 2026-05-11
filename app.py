@@ -585,12 +585,12 @@ def import_settlement_csv(path, store_name=None):
                 "variation": str(r.get("Variation", "")).strip(),
                 "quantity": qty,
                 "unit_price": unit_price,
-                "gross_product": float(rupiah(r.get("SKU Subtotal After Discount", 0))),
+                "gross_product": float(rupiah(r.get("SKU Subtotal Before Discount", 0))),
                 "seller_discount": float(rupiah(r.get("SKU Seller Discount", 0))),
                 "platform_discount": float(rupiah(r.get("SKU Platform Discount", 0))) + float(rupiah(r.get("Payment platform discount", 0))),
                 "platform_fee": platform_fee,
                 "refund_amount": abs(float(rupiah(r.get("Order Refund Amount", 0)))),
-                "order_amount": float(rupiah(r.get("Order Amount", 0))),
+                "order_amount": float(rupiah(r.get("SKU Subtotal Before Discount", 0))) - float(rupiah(r.get("SKU Seller Discount", 0))),
                 "settlement_received": received,
                 "payment_method": str(r.get("Payment Method", "")).strip(),
                 "tracking_id": str(r.get("Tracking ID", "")).strip(),
@@ -806,6 +806,7 @@ def compute_summary(filters=None):
         refund_total = max(abs(float(r["refund_amount"] or 0)) for r in order_rows)
         platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in order_rows)
         platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in order_rows)
+        packing_total = max((float(r["packing_per_unit"] or 0) for r in order_rows if float(r["quantity"] or 0) > 0), default=0)
         cancelled = any(str(r["status"]).lower() in {"dibatalkan", "cancellations", "cancelled"} for r in order_rows)
         is_final = bool(settlement_total) or cancelled
         is_estimated = not settlement_total and not cancelled
@@ -843,7 +844,7 @@ def compute_summary(filters=None):
             platform_fee = platform_fee_total * share
             refund = refund_total * share
             hpp = qty * float(r["hpp_per_unit"] or 0)
-            packing = qty * float(r["packing_per_unit"] or 0)
+            packing = packing_total * share
             profit = omzet - platform_fee - refund - hpp - packing
             totals["qty"] += qty
             totals["hpp"] += hpp
