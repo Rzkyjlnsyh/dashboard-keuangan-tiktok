@@ -1,0 +1,5 @@
+{
+  "scripts": {
+    "build": "mkdir -p public/static && cp -R static/. public/static/ && cp static/index.html public/index.html"
+  }
+}

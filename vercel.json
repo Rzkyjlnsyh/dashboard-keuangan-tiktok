@@ -1,4 +1,7 @@
 {
+  "framework": null,
+  "buildCommand": "npm run build",
+  "outputDirectory": "public",
   "rewrites": [
     { "source": "/api/summary", "destination": "/static/preview-summary.json" },
     { "source": "/api/config", "destination": "/static/preview-config.json" },
