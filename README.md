@@ -39,6 +39,12 @@ SUPABASE_URL=...
 SUPABASE_SERVICE_ROLE_KEY=...
 ```
 
+Untuk testing cepat, jika belum mengambil `service_role`, env berikut juga bisa dipakai:
+
+```text
+SUPABASE_ANON_KEY=...
+```
+
 Opsional untuk cron Telegram:
 
 ```text
@@ -51,6 +57,7 @@ CRON_SECRET=isi-random-yang-kuat
 Catatan penting:
 
 - `SUPABASE_SERVICE_ROLE_KEY` hanya boleh disimpan di Vercel Environment Variables, jangan dimasukkan ke frontend atau commit repo.
+- `SUPABASE_ANON_KEY` boleh untuk uji cepat, tetapi akses tulisnya tergantung permission/RLS tabel Supabase. Untuk operasional serius, ganti ke `service_role` atau `sb_secret_...`.
 - Upload manual dan biaya iklan sudah online lewat Supabase.
 - Auto update folder tetap butuh worker lokal/server yang punya akses ke folder download Desty, karena Vercel tidak bisa membaca folder laptop secara langsung.
 
