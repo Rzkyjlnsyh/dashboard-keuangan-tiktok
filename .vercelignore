@@ -1,10 +1,14 @@
 data/
 uploads/
 logs/
+api/
+app.py
+requirements.txt
+requirements-local.txt
+run_dashboard.command
 __pycache__/
 *.pyc
 .env
 .venv/
 venv/
 .DS_Store
-

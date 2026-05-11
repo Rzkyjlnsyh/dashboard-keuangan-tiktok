@@ -1,0 +1,18 @@
+{
+  "telegramBotToken": "",
+  "telegramChatId": "",
+  "morningTime": "07:30",
+  "alertNegativeProfit": true,
+  "alertMarginBelow": 12,
+  "lastMorningSent": "",
+  "ownerPinEnabled": false,
+  "ownerPin": "",
+  "stores": ["ventura", "giftyours", "custombase"],
+  "defaultStore": "ventura",
+  "folderMonitors": {
+    "ventura": {"enabled": false, "path": "", "intervalMinutes": 10, "storeName": "ventura", "kind": "auto", "lastRun": "", "lastMessage": "Auto update folder hanya tersedia di dashboard lokal.", "fileState": {}},
+    "giftyours": {"enabled": false, "path": "", "intervalMinutes": 10, "storeName": "giftyours", "kind": "auto", "lastRun": "", "lastMessage": "Auto update folder hanya tersedia di dashboard lokal.", "fileState": {}},
+    "custombase": {"enabled": false, "path": "", "intervalMinutes": 10, "storeName": "custombase", "kind": "auto", "lastRun": "", "lastMessage": "Auto update folder hanya tersedia di dashboard lokal.", "fileState": {}}
+  },
+  "folderMonitor": {"enabled": false, "path": "", "intervalMinutes": 10, "storeName": "ventura", "kind": "auto", "lastRun": "", "lastMessage": "Auto update folder hanya tersedia di dashboard lokal.", "fileState": {}}
+}

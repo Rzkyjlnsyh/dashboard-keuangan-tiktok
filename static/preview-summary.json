@@ -1,0 +1,81 @@
+{
+  "generatedAt": "Preview Vercel",
+  "totals": {
+    "orders": 0,
+    "lines": 0,
+    "qty": 0,
+    "gross": 0,
+    "omzet": 0,
+    "platformFee": 0,
+    "platformDiscount": 0,
+    "hpp": 0,
+    "packing": 0,
+    "refund": 0,
+    "settlement": 0,
+    "held": 0,
+    "profit": 0,
+    "profitBeforeAds": 0,
+    "adSpend": 0,
+    "todayOrders": 0,
+    "margin": 0,
+    "finalProfit": 0,
+    "estimatedProfit": 0,
+    "finalProfitBeforeAds": 0,
+    "estimatedProfitBeforeAds": 0,
+    "finalAdSpend": 0,
+    "estimatedAdSpend": 0,
+    "finalOmzet": 0,
+    "estimatedOmzet": 0,
+    "finalOrders": 0,
+    "estimatedOrders": 0,
+    "heldOrders": 0,
+    "finalMargin": 0,
+    "estimatedMargin": 0
+  },
+  "daily": [],
+  "topSku": [],
+  "weakSku": [],
+  "skuDetails": [],
+  "skuSummary": {"total": 0, "profitable": 0, "watch": 0, "bad": 0, "missingCost": 0, "best": null, "weakest": null},
+  "stores": [
+    {"store": "ventura", "orders": 0, "omzet": 0, "profit": 0},
+    {"store": "giftyours", "orders": 0, "omzet": 0, "profit": 0},
+    {"store": "custombase", "orders": 0, "omzet": 0, "profit": 0}
+  ],
+  "status": [],
+  "missingCost": [],
+  "alerts": [
+    {
+      "level": "warn",
+      "title": "Mode preview Vercel",
+      "body": "Preview ini hanya untuk review UI. Data real, upload, auto update folder, dan Telegram tetap berjalan di dashboard lokal agar data toko aman."
+    }
+  ],
+  "assistant": {
+    "score": 0,
+    "health": "Menunggu Data Real",
+    "forecast30Omzet": 0,
+    "forecast30Profit": 0,
+    "accounting": {
+      "pendapatan": 0,
+      "hppPacking": 0,
+      "potonganPlatform": 0,
+      "biayaIklan": 0,
+      "refund": 0,
+      "profitEstimasi": 0,
+      "profitFinal": 0,
+      "profitBelumFinal": 0,
+      "omsetFinal": 0,
+      "omsetBelumFinal": 0
+    },
+    "insights": ["Vercel preview tidak membawa database lokal agar data toko tetap aman."],
+    "actions": ["Gunakan versi lokal untuk data real, atau lanjutkan fase cloud storage jika dashboard ingin online penuh."]
+  },
+  "filters": {"preset": "all", "month": "", "store": "all", "startDate": "", "endDate": ""},
+  "availableMonths": ["2025-12"],
+  "availableStores": ["ventura", "giftyours", "custombase"],
+  "adSpendRows": [],
+  "runs": [],
+  "auditEvents": [],
+  "accessRole": "team"
+}

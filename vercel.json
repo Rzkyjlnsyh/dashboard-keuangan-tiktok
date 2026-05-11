@@ -1,5 +1,8 @@
 {
   "rewrites": [
+    { "source": "/api/summary", "destination": "/static/preview-summary.json" },
+    { "source": "/api/config", "destination": "/static/preview-config.json" },
+    { "source": "/api/(.*)", "destination": "/static/preview-disabled.json" },
     { "source": "/", "destination": "/static/index.html" },
     { "source": "/owner", "destination": "/static/index.html" },
     { "source": "/team", "destination": "/static/index.html" },
