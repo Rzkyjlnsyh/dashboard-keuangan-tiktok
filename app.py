@@ -1330,7 +1330,7 @@ class AppHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
-        if route in {"/", "/owner", "/team", "/tv"}:
+        if route in {"/", "/owner", "/team", "/tv", "/static/index.html"}:
             return self.send_file(ROOT / "static" / "index.html", "text/html; charset=utf-8")
         if route == "/static/styles.css":
             return self.send_file(ROOT / "static" / "styles.css", "text/css; charset=utf-8")

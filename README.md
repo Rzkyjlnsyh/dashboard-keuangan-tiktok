@@ -38,6 +38,14 @@ Jika upload berikutnya berisi nomor order yang sama, data lama diperbarui berdas
 - `TV Kantor`: tampilan aman untuk tim di link khusus `http://127.0.0.1:8787/tv`, menyembunyikan profit asli dan biaya rahasia.
 - `Upload & Otomatis`: upload data, scan folder otomatis, dan simpan pengaturan ringkasan pagi Telegram.
 
+Tab dashboard dipisahkan berdasarkan kebutuhan kerja:
+
+- Owner fokus ke kesehatan finansial dan keputusan bisnis.
+- Detail SKU fokus ke produk yang menghasilkan profit atau perlu diperbaiki.
+- Per Toko fokus ke perbandingan performa antar toko.
+- Tim dan TV fokus ke operasional yang aman dibagikan.
+- Upload & Otomatis fokus ke import data, audit perubahan, folder monitor, dan pengaturan.
+
 Filter yang tersedia:
 
 - `All`

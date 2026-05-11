@@ -1,6 +1,7 @@
+const routeRole = location.pathname.includes("tv") ? "tv" : location.pathname.includes("team") ? "team" : "owner";
 const state = {
-  view: location.pathname.includes("tv") ? "tv" : location.pathname.includes("team") ? "team" : "owner",
-  accessRole: location.pathname.includes("tv") ? "tv" : location.pathname.includes("team") ? "team" : "owner",
+  view: routeRole === "tv" ? "tv" : routeRole === "team" ? "team" : "owner",
+  accessRole: routeRole,
   summary: null,
   config: null,
   filters: { preset: "all", month: "", store: "all" },
@@ -28,11 +29,16 @@ const monthLabel = (value) => {
 
 function setView(view) {
   state.view = view;
-  state.accessRole = view === "tv" ? "tv" : view === "team" ? "team" : "owner";
+  state.accessRole = routeRole !== "owner" ? routeRole : view === "tv" ? "tv" : view === "team" ? "team" : "owner";
   document.body.classList.toggle("tv", view === "tv");
   document.body.classList.toggle("team", view === "team");
   document.body.classList.toggle("restricted", state.accessRole !== "owner");
+  document.querySelectorAll("[data-owner-only]").forEach(btn => btn.hidden = routeRole !== "owner");
   document.querySelectorAll("nav button").forEach(btn => btn.classList.toggle("active", btn.dataset.view === view));
+  document.querySelectorAll("[data-show]").forEach(section => {
+    const allowed = section.dataset.show.split(",").map(x => x.trim());
+    section.hidden = !allowed.includes(view);
+  });
   el("pageTitle").textContent =
     view === "tv" ? "Monitor Operasional" :
     view === "team" ? "Dashboard Tim" :
@@ -48,9 +54,6 @@ function setView(view) {
     view === "stores" ? "Bandingkan performa ventura, giftyours, dan custombase dalam satu layar." :
     "Profit, dana tertahan, potongan, HPP, forecast, dan rekomendasi asisten.";
   el("trendTitle").textContent = state.accessRole !== "owner" ? "Omset 30 Hari" : "Omset & Profit 30 Hari";
-  document.querySelectorAll(".ops-only").forEach(x => x.style.display = view === "ops" ? "grid" : "none");
-  document.querySelectorAll(".stores-only").forEach(x => x.style.display = view === "stores" ? "block" : "none");
-  document.querySelectorAll(".sku-only").forEach(x => x.style.display = view === "sku" ? "block" : "none");
   refresh().catch(err => alert(err.message));
 }
 
@@ -208,6 +211,23 @@ function renderStores(rows) {
       <b class="secret">${fmt(r.profit)}</b>
     </article>
   `).join("") || `<p class="hint">Belum ada data untuk toko/periode ini.</p>`;
+  const restricted = state.accessRole !== "owner";
+  el("storeTable").innerHTML = `
+    <tr>
+      <th>Toko</th><th>Order</th><th>Omset</th>${restricted ? "" : "<th>Profit</th><th>Margin</th>"}<th>AOV</th>
+    </tr>
+    ${rows.map(r => {
+      const margin = r.omzet ? Number(r.profit || 0) / Number(r.omzet || 1) * 100 : 0;
+      const aov = r.orders ? Number(r.omzet || 0) / Number(r.orders || 1) : 0;
+      return `<tr>
+        <td><strong>${r.store}</strong></td>
+        <td>${num(r.orders)}</td>
+        <td>${fmt(r.omzet)}</td>
+        ${restricted ? "" : `<td>${fmt(r.profit)}</td><td>${margin.toFixed(1)}%</td>`}
+        <td>${fmt(aov)}</td>
+      </tr>`;
+    }).join("")}
+  `;
 }
 
 function renderTable(id, rows) {

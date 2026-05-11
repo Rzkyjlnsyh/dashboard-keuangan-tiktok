@@ -22,12 +22,12 @@
         </div>
       </div>
       <nav>
-        <button class="active" data-view="owner">Owner</button>
+        <button class="active" data-view="owner" data-owner-only="true">Owner</button>
         <button data-view="team">Tim</button>
-        <button data-view="sku">Detail SKU</button>
-        <button data-view="stores">Per Toko</button>
+        <button data-view="sku" data-owner-only="true">Detail SKU</button>
+        <button data-view="stores" data-owner-only="true">Per Toko</button>
         <button data-view="tv">TV Kantor</button>
-        <button data-view="ops">Upload & Otomatis</button>
+        <button data-view="ops" data-owner-only="true">Upload & Otomatis</button>
       </nav>
       <div class="sync-card">
         <span>Update terakhir</span>
@@ -49,7 +49,7 @@
         </div>
       </header>
 
-      <section class="filters">
+      <section class="filters" data-show="owner,team,tv,sku,stores">
         <div>
           <span>Periode</span>
           <div class="segments">
@@ -64,9 +64,9 @@
         <label>Toko <select id="storeFilter"></select></label>
       </section>
 
-      <section id="alerts" class="alerts"></section>
+      <section id="alerts" class="alerts" data-show="owner,team,tv,ops"></section>
 
-      <section class="kpis">
+      <section class="kpis" data-show="owner,team,tv">
         <article><span>Order Unik</span><strong id="orders">0</strong><em id="todayOrders">Hari ini 0</em></article>
         <article><span>Omset Terdata</span><strong id="omzet">Rp0</strong><em>Net dari data upload</em></article>
         <article class="secret"><span>Profit Total Estimasi</span><strong id="profit">Rp0</strong><em id="margin">0%</em></article>
@@ -78,7 +78,7 @@
         <article class="secret"><span>HPP + Packing</span><strong id="hpp">Rp0</strong><em>Dari template SKU</em></article>
       </section>
 
-      <section class="grid">
+      <section class="grid" data-show="owner,team,tv">
         <article class="panel wide">
           <div class="panel-head">
             <div><span>Trend</span><strong id="trendTitle">Omset & Profit 30 Hari</strong></div>
@@ -91,7 +91,7 @@
         </article>
       </section>
 
-      <section class="grid secret">
+      <section class="grid secret" data-show="owner">
         <article class="panel assistant-panel secret">
           <div class="panel-head"><div><span>AI Finance Assistant</span><strong>Analisa & Rekomendasi</strong></div><b id="healthScore">0</b></div>
           <div id="assistant" class="assistant"></div>
@@ -106,12 +106,13 @@
         </article>
       </section>
 
-      <section class="panel stores-only">
+      <section class="panel stores-only" data-show="stores">
         <div class="panel-head"><div><span>Dashboard Per Toko</span><strong>Perbandingan Semua Toko</strong></div></div>
         <div id="storeCards" class="store-cards"></div>
+        <div class="table-wrap store-table"><table id="storeTable"></table></div>
       </section>
 
-      <section class="grid">
+      <section class="grid" data-show="owner,team,tv">
         <article class="panel">
           <div class="panel-head"><div><span>SKU</span><strong>Profit Terbesar</strong></div></div>
           <div class="table-wrap"><table id="topSku"></table></div>
@@ -122,7 +123,7 @@
         </article>
       </section>
 
-      <section class="panel sku-only secret">
+      <section class="panel sku-only secret" data-show="sku">
         <div class="panel-head">
           <div><span>Detail SKU</span><strong>Penghasil vs Kurang Bagus</strong></div>
           <div class="table-controls">
@@ -153,7 +154,7 @@
         <div class="table-wrap detail-table"><table id="skuDetailTable"></table></div>
       </section>
 
-      <section id="uploadPanel" class="grid ops-only">
+      <section id="uploadPanel" class="grid ops-only" data-show="ops">
         <article class="panel">
           <div class="panel-head"><div><span>Upload</span><strong>Data SKU, Order, atau Pencairan</strong></div></div>
           <form id="uploadForm" class="form">
@@ -222,7 +223,7 @@
         </article>
       </section>
 
-      <section class="grid ops-only">
+      <section class="grid ops-only" data-show="ops">
         <article class="panel">
           <div class="panel-head"><div><span>Telegram</span><strong>Ringkasan Otomatis Pagi</strong></div></div>
           <form id="configForm" class="form">
