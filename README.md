@@ -43,6 +43,7 @@ Untuk testing cepat, jika belum mengambil `service_role`, env berikut juga bisa 
 
 ```text
 SUPABASE_ANON_KEY=...
+SUPABASE_PUBLISHABLE_KEY=...
 ```
 
 Opsional untuk cron Telegram:
