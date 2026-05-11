@@ -247,6 +247,32 @@ td:last-child, th:last-child { text-align: right; }
 .hint { color: var(--muted); margin: 0; }
 .runs { display: grid; gap: 10px; color: var(--muted); }
 .run { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #10151d; }
+.folder-cards, .audit-events { display: grid; gap: 10px; margin-top: 14px; }
+.folder-card, .audit-change {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #10151d;
+}
+.folder-card.on { border-color: rgba(94,224,160,.32); background: rgba(94,224,160,.06); }
+.folder-card span, .audit-change span {
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.folder-card strong { display: block; margin-top: 5px; }
+.folder-card p { margin: 8px 0; color: #d9e0eb; overflow-wrap: anywhere; }
+.folder-card em, .audit-change em { color: var(--muted); font-style: normal; font-size: 12px; }
+.audit-change {
+  display: grid;
+  gap: 8px;
+  border-left: 4px solid var(--gold);
+}
+.audit-change.new { border-left-color: var(--green); }
+.audit-change.cash { border-left-color: var(--blue); }
+.audit-change p { margin: 0; color: #e7edf6; overflow-wrap: anywhere; }
+.audit-change b { color: var(--gold); }
 .ops-only, .stores-only, .sku-only { display: none; }
 body.tv .secret, body.tv .ops-only { display: none; }
 body.tv .shell { grid-template-columns: 1fr; }

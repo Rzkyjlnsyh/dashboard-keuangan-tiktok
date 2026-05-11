@@ -212,8 +212,10 @@
             <label class="check"><input name="enabled" type="checkbox"> Aktifkan auto update</label>
             <button>Simpan Auto Update</button>
             <button type="button" id="folderRun">Scan Sekarang</button>
+            <button type="button" id="folderRunAll">Scan Semua Toko</button>
             <p id="folderStatus" class="hint">Belum berjalan</p>
           </form>
+          <div id="folderCards" class="folder-cards"></div>
         </article>
       </section>
 
@@ -231,6 +233,8 @@
         <article class="panel">
           <div class="panel-head"><div><span>Audit</span><strong>Riwayat Upload</strong></div></div>
           <div id="runs" class="runs"></div>
+          <div class="panel-head compact-head"><div><span>Perubahan</span><strong>Status, Order, dan Pencairan</strong></div></div>
+          <div id="auditEvents" class="audit-events"></div>
           <div class="panel-head compact-head"><div><span>Iklan</span><strong>Riwayat Biaya Iklan</strong></div></div>
           <div id="adSpendRows" class="runs"></div>
         </article>

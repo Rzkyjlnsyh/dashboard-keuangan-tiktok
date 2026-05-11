@@ -5,6 +5,7 @@ const state = {
   filters: { preset: "all", month: "", store: "all" },
   skuSort: "profit",
   skuStatus: "all",
+  folderStore: "ventura",
 };
 
 const el = (id) => document.getElementById(id);
@@ -72,12 +73,19 @@ function populateStores(stores) {
   const options = [`<option value="all">Semua Toko</option>`].concat(
     stores.map(s => `<option value="${s}">${s}</option>`)
   ).join("");
+  const storeValue = el("storeFilter").value || state.filters.store;
   el("storeFilter").innerHTML = options;
-  el("storeFilter").value = state.filters.store;
+  el("storeFilter").value = [...el("storeFilter").options].some(opt => opt.value === storeValue) ? storeValue : state.filters.store;
   const uploadOptions = stores.map(s => `<option value="${s}">${s}</option>`).join("");
+  const uploadValue = el("uploadStore").value;
+  const folderValue = el("folderStore").value || state.folderStore;
+  const adValue = el("adStore").value;
   el("uploadStore").innerHTML = uploadOptions;
   el("folderStore").innerHTML = uploadOptions;
   el("adStore").innerHTML = uploadOptions;
+  if (uploadValue) el("uploadStore").value = uploadValue;
+  if (folderValue) el("folderStore").value = folderValue;
+  if (adValue) el("adStore").value = adValue;
 }
 
 function populateMonths(months) {
@@ -112,6 +120,7 @@ function render(summary) {
   renderTable("weakSku", summary.weakSku);
   renderSkuDetail(summary);
   renderRuns(summary.runs);
+  renderAuditEvents(summary.auditEvents || []);
   renderAdSpendRows(summary.adSpendRows || []);
   renderAssistant(summary.assistant);
   renderStores(summary.stores);
@@ -234,9 +243,39 @@ function renderRuns(rows) {
   el("runs").innerHTML = rows.map(r => `
     <div class="run">
       <strong>${r.kind} · ${r.store_name || "-"} · ${r.filename}</strong><br>
-      ${r.rows_seen} baris, ${r.inserted} baru, ${r.updated} update<br>
+      ${r.rows_seen} baris, ${r.inserted} baru, ${r.updated} berubah, ${r.unchanged || 0} sama<br>
+      ${r.audit_count || 0} catatan audit<br>
       ${r.created_at}
     </div>`).join("") || "Belum ada upload.";
+}
+
+function renderAuditEvents(rows) {
+  const labels = {
+    order: "Order baru",
+    status: "Status order",
+    order_amount: "Total order",
+    settlement_received: "Pencairan",
+    platform_fee: "Potongan platform",
+    refund_amount: "Refund",
+    tracking_id: "Resi",
+    quantity: "Qty",
+  };
+  const moneyFields = new Set(["order_amount", "settlement_received", "platform_fee", "refund_amount"]);
+  el("auditEvents").innerHTML = rows.slice(0, 30).map(r => {
+    const label = labels[r.field_name] || r.field_name;
+    const oldValue = moneyFields.has(r.field_name) ? fmt(r.old_value) : (r.old_value || "-");
+    const newValue = moneyFields.has(r.field_name) ? fmt(r.new_value) : (r.new_value || "-");
+    const type = r.change_type === "inserted" ? "new" : r.field_name === "settlement_received" ? "cash" : "change";
+    return `
+      <div class="audit-change ${type}">
+        <div>
+          <strong>${label}</strong>
+          <span>${r.store_name} · Order ${r.order_id || "-"} · ${r.sku || "-"}</span>
+        </div>
+        <p>${oldValue} <b>→</b> ${newValue}</p>
+        <em>${r.filename || "-"} · ${r.created_at}</em>
+      </div>`;
+  }).join("") || `<p class="hint">Belum ada perubahan yang tercatat.</p>`;
 }
 
 function renderAdSpendRows(rows) {
@@ -286,19 +325,43 @@ async function loadConfig() {
   const cfg = await api("/api/config");
   state.config = cfg;
   populateStores(cfg.stores || []);
+  if (!state.folderStore || !(cfg.stores || []).includes(state.folderStore)) state.folderStore = (cfg.stores || ["ventura"])[0];
   el("adSpendDate").value = new Date().toISOString().slice(0, 10);
   const form = document.getElementById("configForm");
   for (const [k, v] of Object.entries(cfg)) {
     if (form.elements[k]) form.elements[k].value = v;
   }
-  const folder = cfg.folderMonitor || {};
+  renderFolderMonitor();
+}
+
+function currentFolderMonitor() {
+  const monitors = (state.config && state.config.folderMonitors) || {};
+  return monitors[state.folderStore] || { storeName: state.folderStore, enabled: false, path: "", kind: "auto", intervalMinutes: 10, lastMessage: "Belum berjalan" };
+}
+
+function renderFolderMonitor() {
+  const folder = currentFolderMonitor();
   const folderForm = document.getElementById("folderForm");
+  el("folderStore").value = folder.storeName || state.folderStore;
   for (const [k, v] of Object.entries(folder)) {
     if (!folderForm.elements[k]) continue;
     if (folderForm.elements[k].type === "checkbox") folderForm.elements[k].checked = Boolean(v);
     else folderForm.elements[k].value = v;
   }
   el("folderStatus").textContent = `${folder.enabled ? "Aktif" : "Nonaktif"} · ${folder.lastMessage || "Belum berjalan"}`;
+  renderFolderCards((state.config && state.config.folderMonitors) || {});
+}
+
+function renderFolderCards(monitors) {
+  const rows = Object.values(monitors);
+  el("folderCards").innerHTML = rows.map(m => `
+    <div class="folder-card ${m.enabled ? "on" : ""}">
+      <span>${m.storeName}</span>
+      <strong>${m.enabled ? "Aktif" : "Nonaktif"}</strong>
+      <p>${m.path || "Folder belum diisi"}</p>
+      <em>${m.lastRun ? "Scan terakhir " + m.lastRun : "Belum pernah scan"} · ${m.lastMessage || "Belum berjalan"}</em>
+    </div>
+  `).join("") || `<p class="hint">Belum ada konfigurasi folder.</p>`;
 }
 
 document.querySelectorAll("nav button").forEach(btn => btn.addEventListener("click", () => {
@@ -333,6 +396,10 @@ el("skuStatus").addEventListener("change", (event) => {
   state.skuStatus = event.target.value;
   if (state.summary) renderSkuDetail(state.summary);
 });
+el("folderStore").addEventListener("change", (event) => {
+  state.folderStore = event.target.value;
+  renderFolderMonitor();
+});
 el("refreshBtn").addEventListener("click", refresh);
 el("jumpUploadBtn").addEventListener("click", () => { setView("ops"); el("uploadPanel").scrollIntoView({ behavior: "smooth" }); });
 el("sampleBtn").addEventListener("click", async () => {
@@ -352,6 +419,7 @@ document.getElementById("folderForm").addEventListener("submit", async (event) =
   event.preventDefault();
   const data = Object.fromEntries(new FormData(event.target).entries());
   data.enabled = event.target.elements.enabled.checked;
+  state.folderStore = data.storeName || state.folderStore;
   await api("/api/folder-monitor", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
   await loadConfig();
 });
@@ -365,8 +433,15 @@ document.getElementById("adSpendForm").addEventListener("submit", async (event) 
   await refresh();
 });
 el("folderRun").addEventListener("click", async () => {
-  const result = await api("/api/folder-run", { method: "POST" });
+  const result = await api("/api/folder-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storeName: el("folderStore").value }) });
   el("folderStatus").textContent = result.message;
+  await loadConfig();
+  await refresh();
+});
+el("folderRunAll").addEventListener("click", async () => {
+  const result = await api("/api/folder-run", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storeName: "all" }) });
+  el("folderStatus").textContent = result.message;
+  await loadConfig();
   await refresh();
 });
 document.getElementById("configForm").addEventListener("submit", async (event) => {
@@ -382,4 +457,7 @@ el("telegramTest").addEventListener("click", async () => {
 
 setView(state.view);
 loadConfig().then(refresh).catch(err => alert(err.message));
-setInterval(refresh, 60000);
+setInterval(async () => {
+  await refresh();
+  if (state.view === "ops") await loadConfig();
+}, 60000);

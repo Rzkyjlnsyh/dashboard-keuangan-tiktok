@@ -27,6 +27,16 @@ SAMPLES = {
 }
 DEFAULT_STORES = ["ventura", "giftyours", "custombase"]
 DEFAULT_STORE = "ventura"
+AUDIT_FIELDS = {
+    "status": "Status order",
+    "order_amount": "Total order",
+    "settlement_received": "Pencairan",
+    "platform_fee": "Potongan platform",
+    "refund_amount": "Refund",
+    "tracking_id": "Resi",
+    "quantity": "Qty",
+}
+NUMERIC_AUDIT_FIELDS = {"order_amount", "settlement_received", "platform_fee", "refund_amount", "quantity"}
 
 
 def ensure_dirs():
@@ -73,24 +83,50 @@ def read_config():
     }
     config.setdefault("stores", DEFAULT_STORES)
     config.setdefault("defaultStore", DEFAULT_STORE)
-    config.setdefault(
-        "folderMonitor",
-        {
-            "enabled": False,
-            "path": "",
-            "intervalMinutes": 10,
-            "storeName": DEFAULT_STORE,
-            "kind": "auto",
-            "lastRun": "",
-            "lastMessage": "Belum berjalan",
-            "fileState": {},
-        },
-    )
+    normalize_folder_monitors(config)
     return config
 
 
 def write_config(config):
+    normalize_folder_monitors(config)
     CONFIG_PATH.write_text(json.dumps(config, indent=2))
+
+
+def default_folder_monitor(store_name):
+    return {
+        "enabled": False,
+        "path": "",
+        "intervalMinutes": 10,
+        "storeName": normalize_store(store_name),
+        "kind": "auto",
+        "lastRun": "",
+        "lastMessage": "Belum berjalan",
+        "fileState": {},
+    }
+
+
+def normalize_folder_monitors(config):
+    stores = [normalize_store(s) for s in config.get("stores", DEFAULT_STORES)]
+    config["stores"] = stores
+    monitors = config.get("folderMonitors")
+    if not isinstance(monitors, dict):
+        monitors = {}
+    legacy = config.get("folderMonitor")
+    if isinstance(legacy, dict) and any(legacy.get(k) for k in ["path", "lastRun", "enabled"]):
+        legacy_store = normalize_store(legacy.get("storeName", config.get("defaultStore", DEFAULT_STORE)))
+        monitors.setdefault(legacy_store, legacy)
+    normalized = {}
+    for store in stores:
+        monitor = {**default_folder_monitor(store), **(monitors.get(store) or {})}
+        monitor["storeName"] = store
+        monitor["intervalMinutes"] = int(monitor.get("intervalMinutes") or 10)
+        monitor["kind"] = str(monitor.get("kind") or "auto")
+        monitor["enabled"] = bool(monitor.get("enabled"))
+        monitor["fileState"] = dict(monitor.get("fileState") or {})
+        normalized[store] = monitor
+    config["folderMonitors"] = normalized
+    default_store = normalize_store(config.get("defaultStore", DEFAULT_STORE))
+    config["folderMonitor"] = normalized.get(default_store, default_folder_monitor(default_store))
 
 
 def connect():
@@ -146,7 +182,25 @@ def init_db():
                 rows_seen INTEGER,
                 inserted INTEGER,
                 updated INTEGER,
+                unchanged INTEGER DEFAULT 0,
+                audit_count INTEGER DEFAULT 0,
                 notes TEXT,
+                created_at TEXT
+            );
+            CREATE TABLE IF NOT EXISTS audit_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                import_run_id INTEGER,
+                filename TEXT,
+                kind TEXT,
+                store_name TEXT,
+                entity_type TEXT,
+                entity_key TEXT,
+                order_id TEXT,
+                sku TEXT,
+                change_type TEXT,
+                field_name TEXT,
+                old_value TEXT,
+                new_value TEXT,
                 created_at TEXT
             );
             CREATE TABLE IF NOT EXISTS ad_spend (
@@ -221,6 +275,8 @@ def migrate_db(conn):
         conn.execute("DROP TABLE sku_costs")
         conn.execute("ALTER TABLE sku_costs_new RENAME TO sku_costs")
     ensure_column(conn, "import_runs", "store_name", "TEXT")
+    ensure_column(conn, "import_runs", "unchanged", "INTEGER DEFAULT 0")
+    ensure_column(conn, "import_runs", "audit_count", "INTEGER DEFAULT 0")
     ensure_column(conn, "order_lines", "source_kind", "TEXT")
     conn.execute(
         """
@@ -250,11 +306,85 @@ def line_key(store_name, order_id, sku, variation):
     return raw.strip().lower()
 
 
-def upsert_line(conn, row):
+def audit_value(field, value):
+    if value is None:
+        return ""
+    if field in NUMERIC_AUDIT_FIELDS:
+        return str(rupiah(value))
+    return str(value or "").strip()
+
+
+def log_audit_event(conn, run_id, filename, kind, row, change_type, field_name, old_value, new_value):
+    conn.execute(
+        """
+        INSERT INTO audit_events
+        (import_run_id, filename, kind, store_name, entity_type, entity_key, order_id, sku,
+         change_type, field_name, old_value, new_value, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            run_id,
+            filename,
+            kind,
+            normalize_store(row.get("store_name", DEFAULT_STORE)),
+            "order_line",
+            row.get("line_key"),
+            row.get("order_id"),
+            row.get("sku"),
+            change_type,
+            field_name,
+            old_value,
+            new_value,
+            now_iso(),
+        ),
+    )
+
+
+def start_import_run(conn, filename, kind, store_name):
+    cur = conn.execute(
+        """
+        INSERT INTO import_runs
+        (filename, kind, store_name, rows_seen, inserted, updated, unchanged, audit_count, notes, created_at)
+        VALUES (?, ?, ?, 0, 0, 0, 0, 0, ?, ?)
+        """,
+        (Path(filename).name, kind, store_name, "Sedang diproses", now_iso()),
+    )
+    return cur.lastrowid
+
+
+def finish_import_run(conn, run_id, rows_seen, inserted, updated, unchanged, audit_count, notes):
+    conn.execute(
+        """
+        UPDATE import_runs
+        SET rows_seen=?, inserted=?, updated=?, unchanged=?, audit_count=?, notes=?
+        WHERE id=?
+        """,
+        (rows_seen, inserted, updated, unchanged, audit_count, notes, run_id),
+    )
+
+
+def upsert_line(conn, row, kind=None, filename=None, run_id=None):
     existing = conn.execute(
-        "SELECT status, settlement_received, order_amount, platform_fee FROM order_lines WHERE line_key=?",
+        "SELECT * FROM order_lines WHERE line_key=?",
         (row["line_key"],),
     ).fetchone()
+    changes = []
+    if existing is None:
+        snapshot = (
+            f"{row.get('status') or 'Tanpa status'} | "
+            f"Order {audit_value('order_amount', row.get('order_amount'))} | "
+            f"Pencairan {audit_value('settlement_received', row.get('settlement_received'))}"
+        )
+        changes.append(("inserted", "order", "", snapshot))
+    else:
+        for field in AUDIT_FIELDS:
+            old_value = audit_value(field, existing[field])
+            new_raw = row.get(field)
+            if field == "settlement_received":
+                new_raw = max(float(existing[field] or 0), float(new_raw or 0))
+            new_value = audit_value(field, new_raw)
+            if old_value != new_value:
+                changes.append(("updated", field, old_value, new_value))
     fields = [
         "line_key", "order_id", "store_name", "source", "created_at", "updated_at", "status", "sku",
         "product_name", "variation", "quantity", "unit_price", "gross_product", "seller_discount",
@@ -289,7 +419,14 @@ def upsert_line(conn, row):
         """,
         [row.get(field) for field in fields],
     )
-    return "inserted" if existing is None else "updated"
+    if run_id and filename and kind:
+        for change_type, field_name, old_value, new_value in changes:
+            log_audit_event(conn, run_id, Path(filename).name, kind, row, change_type, field_name, old_value, new_value)
+    if existing is None:
+        return "inserted", len(changes)
+    if changes:
+        return "updated", len(changes)
+    return "unchanged", 0
 
 
 def import_sku(path, store_name="global"):
@@ -298,6 +435,7 @@ def import_sku(path, store_name="global"):
     df.columns = [clean_col(c) for c in df.columns]
     inserted = updated = 0
     with connect() as conn:
+        run_id = start_import_run(conn, Path(path).name, "sku", store_name)
         for _, r in df.iterrows():
             sku = str(r.get("sku", "")).strip()
             if not sku:
@@ -330,19 +468,17 @@ def import_sku(path, store_name="global"):
                 updated += 1
             else:
                 inserted += 1
-        conn.execute(
-            "INSERT INTO import_runs (filename, kind, store_name, rows_seen, inserted, updated, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (Path(path).name, "sku", store_name, len(df), inserted, updated, "HPP dan packing diperbarui", now_iso()),
-        )
-    return {"kind": "sku", "storeName": store_name, "rows": len(df), "inserted": inserted, "updated": updated}
+        finish_import_run(conn, run_id, len(df), inserted, updated, 0, 0, "HPP dan packing diperbarui")
+    return {"kind": "sku", "storeName": store_name, "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": 0, "auditCount": 0}
 
 
 def import_order_excel(path, store_name=None):
     selected_store = normalize_store(store_name) if store_name else None
     df = pd.read_excel(path, sheet_name="Daftar Pesanan")
     df.columns = [clean_col(c) for c in df.columns]
-    inserted = updated = 0
+    inserted = updated = unchanged = audit_count = 0
     with connect() as conn:
+        run_id = start_import_run(conn, Path(path).name, "orders", selected_store or "sesuai file")
         for _, r in df.iterrows():
             order_id = str(r.get("Nomor Pesanan (di Marketplace)", "")).replace(".0", "").strip()
             sku = str(r.get("SKU Marketplace", "")).strip()
@@ -376,22 +512,22 @@ def import_order_excel(path, store_name=None):
                 "last_seen_file": Path(path).name,
                 "last_seen_at": now_iso(),
             }
-            action = upsert_line(conn, row)
+            action, changes = upsert_line(conn, row, "orders", Path(path).name, run_id)
             inserted += action == "inserted"
             updated += action == "updated"
-        conn.execute(
-            "INSERT INTO import_runs (filename, kind, store_name, rows_seen, inserted, updated, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (Path(path).name, "orders", selected_store or "sesuai file", len(df), inserted, updated, "Order Desty diperbarui", now_iso()),
-        )
-    return {"kind": "orders", "storeName": selected_store or "sesuai file", "rows": len(df), "inserted": inserted, "updated": updated}
+            unchanged += action == "unchanged"
+            audit_count += changes
+        finish_import_run(conn, run_id, len(df), inserted, updated, unchanged, audit_count, "Order Desty diperbarui")
+    return {"kind": "orders", "storeName": selected_store or "sesuai file", "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": unchanged, "auditCount": audit_count}
 
 
 def import_settlement_csv(path, store_name=None):
     selected_store = normalize_store(store_name) if store_name else DEFAULT_STORE
     df = pd.read_csv(path)
     df.columns = [clean_col(c) for c in df.columns]
-    inserted = updated = 0
+    inserted = updated = unchanged = audit_count = 0
     with connect() as conn:
+        run_id = start_import_run(conn, Path(path).name, "settlement", selected_store)
         for _, r in df.iterrows():
             order_id = str(r.get("Order ID", "")).replace(".0", "").strip()
             sku = str(r.get("Seller SKU", "")).strip()
@@ -433,14 +569,13 @@ def import_settlement_csv(path, store_name=None):
                 "last_seen_file": Path(path).name,
                 "last_seen_at": now_iso(),
             }
-            action = upsert_line(conn, row)
+            action, changes = upsert_line(conn, row, "settlement", Path(path).name, run_id)
             inserted += action == "inserted"
             updated += action == "updated"
-        conn.execute(
-            "INSERT INTO import_runs (filename, kind, store_name, rows_seen, inserted, updated, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (Path(path).name, "settlement", selected_store, len(df), inserted, updated, "Pencairan/status marketplace diperbarui", now_iso()),
-        )
-    return {"kind": "settlement", "storeName": selected_store, "rows": len(df), "inserted": inserted, "updated": updated}
+            unchanged += action == "unchanged"
+            audit_count += changes
+        finish_import_run(conn, run_id, len(df), inserted, updated, unchanged, audit_count, "Pencairan/status marketplace diperbarui")
+    return {"kind": "settlement", "storeName": selected_store, "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": unchanged, "auditCount": audit_count}
 
 
 def detect_and_import(path, kind="auto", store_name=DEFAULT_STORE):
@@ -516,6 +651,23 @@ def available_months():
             """
         ).fetchall()
     return [r["month"] for r in rows if r["month"]]
+
+
+def recent_audit_events(filters=None, limit=40):
+    filters = filters or {}
+    store_name = filters.get("store", "all")
+    where = []
+    params = []
+    if store_name != "all":
+        where.append("lower(store_name)=lower(?)")
+        params.append(normalize_store(store_name))
+    sql = "SELECT * FROM audit_events"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    with connect() as conn:
+        return [dict(row) for row in conn.execute(sql, params).fetchall()]
 
 
 def filtered_ad_spend(filters, start_date=None, end_date=None):
@@ -795,6 +947,7 @@ def compute_summary(filters=None):
         "availableStores": read_config().get("stores", DEFAULT_STORES),
         "adSpendRows": ad_rows[:12],
         "runs": recent_runs,
+        "auditEvents": recent_audit_events(filters),
     }
 
 
@@ -906,11 +1059,16 @@ def send_telegram(text):
 
 
 def scan_folder_once(folder_config):
-    folder = Path(folder_config.get("path", "")).expanduser()
+    raw_path = str(folder_config.get("path", "") or "").strip()
+    if not raw_path:
+        folder_config["lastMessage"] = "Folder belum diisi"
+        return {"ok": False, "message": "Folder belum diisi.", "results": [], "errors": []}
+    folder = Path(raw_path).expanduser()
     if not folder.exists() or not folder.is_dir():
         return {"ok": False, "message": "Folder tidak ditemukan.", "results": []}
     state = dict(folder_config.get("fileState") or {})
     results = []
+    errors = []
     for path in sorted(folder.iterdir()):
         if path.suffix.lower() not in {".csv", ".xlsx"} or path.name.startswith("~$"):
             continue
@@ -918,29 +1076,66 @@ def scan_folder_once(folder_config):
         signature = f"{int(stat.st_mtime)}:{stat.st_size}"
         if state.get(str(path)) == signature:
             continue
-        results.append(detect_and_import(path, folder_config.get("kind", "auto"), folder_config.get("storeName", DEFAULT_STORE)))
-        state[str(path)] = signature
+        try:
+            results.append(detect_and_import(path, folder_config.get("kind", "auto"), folder_config.get("storeName", DEFAULT_STORE)))
+            state[str(path)] = signature
+        except Exception as exc:
+            errors.append({"file": path.name, "error": str(exc)})
     folder_config["fileState"] = state
     folder_config["lastRun"] = now_iso()
-    folder_config["lastMessage"] = f"{len(results)} file baru/berubah diproses" if results else "Tidak ada file baru"
-    return {"ok": True, "message": folder_config["lastMessage"], "results": results}
+    if results and errors:
+        folder_config["lastMessage"] = f"{len(results)} file diproses, {len(errors)} error"
+    elif results:
+        folder_config["lastMessage"] = f"{len(results)} file baru/berubah diproses"
+    elif errors:
+        folder_config["lastMessage"] = f"{len(errors)} file gagal diproses"
+    else:
+        folder_config["lastMessage"] = "Tidak ada file baru"
+    return {"ok": not errors, "message": folder_config["lastMessage"], "results": results, "errors": errors}
 
 
-def run_folder_monitor(force=False):
+def run_folder_monitor(store_name=None, force=False):
     cfg = read_config()
-    monitor = cfg.get("folderMonitor", {})
-    if not force and not monitor.get("enabled"):
-        return {"ok": True, "message": "Monitor folder belum aktif", "results": []}
-    last_run = monitor.get("lastRun")
-    interval = int(monitor.get("intervalMinutes") or 10)
-    if not force and last_run:
-        last_dt = datetime.strptime(last_run, "%Y-%m-%d %H:%M:%S")
-        if datetime.now() - last_dt < timedelta(minutes=interval):
-            return {"ok": True, "message": "Belum waktunya scan berikutnya", "results": []}
-    result = scan_folder_once(monitor)
-    cfg["folderMonitor"] = monitor
+    monitors = cfg.get("folderMonitors", {})
+    if store_name and store_name != "all":
+        targets = [normalize_store(store_name)]
+    else:
+        targets = list(monitors.keys())
+    all_results = []
+    all_errors = []
+    store_results = []
+    for store in targets:
+        monitor = monitors.get(store) or default_folder_monitor(store)
+        if not force and not monitor.get("enabled"):
+            store_results.append({"storeName": store, "ok": True, "message": "Monitor folder belum aktif", "results": [], "errors": []})
+            continue
+        last_run = monitor.get("lastRun")
+        interval = int(monitor.get("intervalMinutes") or 10)
+        if not force and last_run:
+            last_dt = datetime.strptime(last_run, "%Y-%m-%d %H:%M:%S")
+            if datetime.now() - last_dt < timedelta(minutes=interval):
+                store_results.append({"storeName": store, "ok": True, "message": "Belum waktunya scan berikutnya", "results": [], "errors": []})
+                continue
+        result = scan_folder_once(monitor)
+        result["storeName"] = store
+        monitors[store] = monitor
+        all_results.extend(result.get("results", []))
+        all_errors.extend(result.get("errors", []))
+        store_results.append(result)
+    cfg["folderMonitors"] = monitors
+    cfg["folderMonitor"] = monitors.get(normalize_store(cfg.get("defaultStore", DEFAULT_STORE)), default_folder_monitor(DEFAULT_STORE))
     write_config(cfg)
-    return result
+    if all_results or all_errors:
+        message = f"{len(all_results)} file diproses, {len(all_errors)} error"
+    elif len(store_results) == 1 and not store_results[0].get("ok"):
+        message = store_results[0].get("message", "Folder belum siap")
+    elif any(not r.get("ok") for r in store_results):
+        message = f"{sum(1 for r in store_results if not r.get('ok'))} toko belum punya folder siap scan"
+    elif any("file" in r.get("message", "").lower() for r in store_results):
+        message = "Tidak ada file baru"
+    else:
+        message = "Belum ada monitor folder yang perlu discan"
+    return {"ok": not all_errors, "message": message, "results": all_results, "errors": all_errors, "stores": store_results}
 
 
 def scheduler_loop():
@@ -1021,16 +1216,29 @@ class AppHandler(BaseHTTPRequestHandler):
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode())
                 current = read_config()
-                monitor = current.get("folderMonitor", {})
+                store_name = normalize_store(body.get("storeName", current.get("defaultStore", DEFAULT_STORE)))
+                monitors = current.get("folderMonitors", {})
+                monitor = monitors.get(store_name) or default_folder_monitor(store_name)
+                previous_path = monitor.get("path")
+                previous_kind = monitor.get("kind")
                 for key in ["enabled", "path", "intervalMinutes", "storeName", "kind"]:
                     if key in body:
                         monitor[key] = body[key]
-                monitor["storeName"] = normalize_store(monitor.get("storeName", DEFAULT_STORE))
+                monitor["storeName"] = store_name
+                monitor["intervalMinutes"] = int(monitor.get("intervalMinutes") or 10)
+                if previous_path != monitor.get("path") or previous_kind != monitor.get("kind"):
+                    monitor["fileState"] = {}
+                    monitor["lastMessage"] = "Pengaturan folder diperbarui"
+                    monitor["lastRun"] = ""
+                monitors[store_name] = monitor
+                current["folderMonitors"] = monitors
                 current["folderMonitor"] = monitor
                 write_config(current)
-                return self.send_json({"ok": True, "folderMonitor": monitor})
+                return self.send_json({"ok": True, "folderMonitor": monitor, "folderMonitors": current.get("folderMonitors", {})})
             if route == "/api/folder-run":
-                result = run_folder_monitor(force=True)
+                length = int(self.headers.get("Content-Length", "0"))
+                body = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
+                result = run_folder_monitor(body.get("storeName"), force=True)
                 return self.send_json({"ok": True, **result, "summary": compute_summary()})
             if route == "/api/ad-spend":
                 length = int(self.headers.get("Content-Length", "0"))
