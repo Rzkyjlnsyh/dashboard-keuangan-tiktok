@@ -23,6 +23,19 @@ EMPTY_SUMMARY = {
         "adSpend": 0,
         "todayOrders": 0,
         "margin": 0,
+        "finalProfit": 0,
+        "estimatedProfit": 0,
+        "finalProfitBeforeAds": 0,
+        "estimatedProfitBeforeAds": 0,
+        "finalAdSpend": 0,
+        "estimatedAdSpend": 0,
+        "finalOmzet": 0,
+        "estimatedOmzet": 0,
+        "finalOrders": 0,
+        "estimatedOrders": 0,
+        "heldOrders": 0,
+        "finalMargin": 0,
+        "estimatedMargin": 0,
     },
     "daily": [],
     "topSku": [],
@@ -63,6 +76,10 @@ EMPTY_SUMMARY = {
             "biayaIklan": 0,
             "refund": 0,
             "profitEstimasi": 0,
+            "profitFinal": 0,
+            "profitBelumFinal": 0,
+            "omsetFinal": 0,
+            "omsetBelumFinal": 0,
         },
         "insights": ["Preview Vercel tidak membawa database lokal agar data toko tetap aman."],
         "actions": ["Gunakan dashboard lokal untuk data real, atau lanjutkan fase cloud upload/storage."],
@@ -72,6 +89,8 @@ EMPTY_SUMMARY = {
     "availableStores": ["ventura", "giftyours", "custombase"],
     "adSpendRows": [],
     "runs": [],
+    "auditEvents": [],
+    "accessRole": "team",
 }
 
 
@@ -85,4 +104,3 @@ class handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
-

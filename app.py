@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import csv
+import copy
+import hashlib
 import io
 import json
 import os
@@ -27,6 +29,7 @@ SAMPLES = {
 }
 DEFAULT_STORES = ["ventura", "giftyours", "custombase"]
 DEFAULT_STORE = "ventura"
+OWNER_PIN_SALT = "pare-finance-dashboard"
 AUDIT_FIELDS = {
     "status": "Status order",
     "order_amount": "Total order",
@@ -37,6 +40,11 @@ AUDIT_FIELDS = {
     "quantity": "Qty",
 }
 NUMERIC_AUDIT_FIELDS = {"order_amount", "settlement_received", "platform_fee", "refund_amount", "quantity"}
+SECRET_TOTAL_KEYS = {
+    "platformFee", "platformDiscount", "hpp", "packing", "refund", "settlement", "profit",
+    "profitBeforeAds", "adSpend", "margin", "finalProfit", "estimatedProfit", "finalProfitBeforeAds",
+    "estimatedProfitBeforeAds", "finalAdSpend", "estimatedAdSpend", "finalMargin", "estimatedMargin",
+}
 
 
 def ensure_dirs():
@@ -80,9 +88,11 @@ def read_config():
         "alertNegativeProfit": True,
         "alertMarginBelow": 12,
         "lastMorningSent": "",
+        "ownerPinHash": "",
     }
     config.setdefault("stores", DEFAULT_STORES)
     config.setdefault("defaultStore", DEFAULT_STORE)
+    config.setdefault("ownerPinHash", "")
     normalize_folder_monitors(config)
     return config
 
@@ -90,6 +100,24 @@ def read_config():
 def write_config(config):
     normalize_folder_monitors(config)
     CONFIG_PATH.write_text(json.dumps(config, indent=2))
+
+
+def hash_owner_pin(pin):
+    pin = str(pin or "").strip()
+    if not pin:
+        return ""
+    return hashlib.sha256(f"{OWNER_PIN_SALT}:{pin}".encode("utf-8")).hexdigest()
+
+
+def owner_pin_enabled():
+    return bool(read_config().get("ownerPinHash"))
+
+
+def owner_pin_valid(pin):
+    expected = read_config().get("ownerPinHash", "")
+    if not expected:
+        return True
+    return hash_owner_pin(pin) == expected
 
 
 def default_folder_monitor(store_name):
@@ -758,6 +786,9 @@ def compute_summary(filters=None):
         "orders": set(), "lines": 0, "qty": 0, "gross": 0, "omzet": 0, "platformFee": 0,
         "platformDiscount": 0, "hpp": 0, "packing": 0, "refund": 0, "settlement": 0, "held": 0,
         "profit": 0, "profitBeforeAds": 0, "adSpend": 0, "todayOrders": 0,
+        "finalProfit": 0, "estimatedProfit": 0, "finalProfitBeforeAds": 0, "estimatedProfitBeforeAds": 0,
+        "finalAdSpend": 0, "estimatedAdSpend": 0, "finalOmzet": 0, "estimatedOmzet": 0,
+        "finalOrders": set(), "estimatedOrders": set(), "heldOrders": set(),
     }
     today = date.today().isoformat()
     for order_id, order_rows in groups.items():
@@ -776,9 +807,17 @@ def compute_summary(filters=None):
         platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in order_rows)
         platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in order_rows)
         cancelled = any(str(r["status"]).lower() in {"dibatalkan", "cancellations", "cancelled"} for r in order_rows)
+        is_final = bool(settlement_total) or cancelled
+        is_estimated = not settlement_total and not cancelled
         totals["orders"].add(order_id)
         totals["lines"] += len(order_rows)
         totals["omzet"] += order_total
+        if is_final:
+            totals["finalOrders"].add(order_id)
+            totals["finalOmzet"] += order_total
+        elif is_estimated:
+            totals["estimatedOrders"].add(order_id)
+            totals["estimatedOmzet"] += order_total
         totals["gross"] += gross_sum
         totals["platformFee"] += platform_fee_total
         totals["platformDiscount"] += platform_discount_total
@@ -786,6 +825,7 @@ def compute_summary(filters=None):
         totals["settlement"] += settlement_total
         if not settlement_total and not cancelled:
             totals["held"] += order_total
+            totals["heldOrders"].add(order_id)
         if created_day == today:
             totals["todayOrders"] += 1
         daily.setdefault(created_day, {"date": created_day, "orders": set(), "omzet": 0, "profit": 0})
@@ -809,6 +849,10 @@ def compute_summary(filters=None):
             totals["hpp"] += hpp
             totals["packing"] += packing
             totals["profit"] += profit
+            if is_final:
+                totals["finalProfitBeforeAds"] += profit
+            elif is_estimated:
+                totals["estimatedProfitBeforeAds"] += profit
             daily[created_day]["profit"] += profit
             stores[store]["profit"] += profit
             if qty and not (r["hpp_per_unit"] or r["packing_per_unit"]):
@@ -858,9 +902,19 @@ def compute_summary(filters=None):
         stores[store]["profit"] -= amount
         ad_by_store[store] = ad_by_store.get(store, 0) + amount
     totals["profitBeforeAds"] = totals["profit"]
+    if totals["omzet"]:
+        totals["finalAdSpend"] = totals["adSpend"] * (totals["finalOmzet"] / totals["omzet"])
+        totals["estimatedAdSpend"] = totals["adSpend"] - totals["finalAdSpend"]
+    totals["finalProfit"] = totals["finalProfitBeforeAds"] - totals["finalAdSpend"]
+    totals["estimatedProfit"] = totals["estimatedProfitBeforeAds"] - totals["estimatedAdSpend"]
     totals["profit"] -= totals["adSpend"]
     order_count = len(totals["orders"])
+    final_order_count = len(totals["finalOrders"])
+    estimated_order_count = len(totals["estimatedOrders"])
+    held_order_count = len(totals["heldOrders"])
     margin = (totals["profit"] / totals["omzet"] * 100) if totals["omzet"] else 0
+    final_margin = (totals["finalProfit"] / totals["finalOmzet"] * 100) if totals["finalOmzet"] else 0
+    estimated_margin = (totals["estimatedProfit"] / totals["estimatedOmzet"] * 100) if totals["estimatedOmzet"] else 0
     daily_list = []
     for item in daily.values():
         item["orders"] = len(item["orders"])
@@ -927,7 +981,16 @@ def compute_summary(filters=None):
     assistant = build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
     return {
         "generatedAt": now_iso(),
-        "totals": {**totals, "orders": order_count, "margin": margin},
+        "totals": {
+            **totals,
+            "orders": order_count,
+            "finalOrders": final_order_count,
+            "estimatedOrders": estimated_order_count,
+            "heldOrders": held_order_count,
+            "margin": margin,
+            "finalMargin": final_margin,
+            "estimatedMargin": estimated_margin,
+        },
         "daily": sorted(daily_list, key=lambda x: x["date"])[-30:],
         "topSku": top_sku,
         "weakSku": weak_sku,
@@ -951,6 +1014,72 @@ def compute_summary(filters=None):
     }
 
 
+def redact_summary(summary, role="team"):
+    safe = copy.deepcopy(summary)
+    safe["accessRole"] = role
+    for key in SECRET_TOTAL_KEYS:
+        if key in safe.get("totals", {}):
+            safe["totals"][key] = 0
+    for row in safe.get("daily", []):
+        row["profit"] = 0
+    for row in safe.get("stores", []):
+        row.pop("profit", None)
+    public_sku = []
+    for row in safe.get("topSku", []):
+        public_sku.append(
+            {
+                "sku": row.get("sku"),
+                "product": row.get("product"),
+                "qty": row.get("qty", 0),
+                "orders": row.get("orders", 0),
+                "omzet": row.get("omzet", 0),
+            }
+        )
+    safe["topSku"] = public_sku
+    safe["weakSku"] = []
+    safe["skuDetails"] = []
+    safe["skuSummary"] = {
+        "total": safe.get("skuSummary", {}).get("total", 0),
+        "profitable": 0,
+        "watch": 0,
+        "bad": 0,
+        "missingCost": 0,
+        "best": public_sku[0] if public_sku else None,
+        "weakest": None,
+    }
+    safe["alerts"] = [
+        {
+            "level": "warn",
+            "title": "Mode tim aktif",
+            "body": "Profit, HPP, pencairan, refund, potongan, biaya iklan, dan audit sensitif disembunyikan.",
+        }
+    ]
+    safe["assistant"] = {
+        "score": 0,
+        "health": "Mode Tim",
+        "forecast30Omzet": safe.get("assistant", {}).get("forecast30Omzet", 0),
+        "forecast30Profit": 0,
+        "accounting": {
+            "pendapatan": safe.get("totals", {}).get("omzet", 0),
+            "hppPacking": 0,
+            "potonganPlatform": 0,
+            "biayaIklan": 0,
+            "refund": 0,
+            "profitEstimasi": 0,
+            "profitFinal": 0,
+            "profitBelumFinal": 0,
+            "omsetFinal": 0,
+            "omsetBelumFinal": 0,
+        },
+        "insights": ["Mode tim hanya menampilkan data operasional yang aman untuk dibagikan."],
+        "actions": ["Gunakan akses owner untuk melihat profit, biaya, pencairan, dan rekomendasi finansial lengkap."],
+    }
+    safe["adSpendRows"] = []
+    safe["auditEvents"] = []
+    safe["runs"] = []
+    return safe
+
+
 def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list):
     omzet = float(totals["omzet"] or 0)
     profit = float(totals["profit"] or 0)
@@ -959,6 +1088,10 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
     refund = float(totals["refund"] or 0)
     platform_fee = float(totals["platformFee"] or 0)
     ad_spend = float(totals["adSpend"] or 0)
+    final_profit = float(totals.get("finalProfit", 0) or 0)
+    estimated_profit = float(totals.get("estimatedProfit", 0) or 0)
+    final_omzet = float(totals.get("finalOmzet", 0) or 0)
+    estimated_omzet = float(totals.get("estimatedOmzet", 0) or 0)
     held_ratio = held / omzet * 100 if omzet else 0
     refund_ratio = refund / omzet * 100 if omzet else 0
     fee_ratio = platform_fee / omzet * 100 if omzet else 0
@@ -1002,6 +1135,9 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
             actions.append("Turunkan atau evaluasi campaign iklan yang ROAS/profit SKU-nya belum jelas.")
     if missing_cost:
         actions.append(f"Lengkapi HPP untuk {len(missing_cost)} SKU agar profit tidak terlalu optimistis.")
+    if estimated_omzet > final_omzet:
+        insights.append("Porsi profit estimasi masih lebih besar dari profit final, jadi keputusan cashflow sebaiknya menunggu pencairan berikutnya.")
+        actions.append("Pantau daftar order belum cair dan bandingkan dengan pencairan upload berikutnya.")
     if top_sku:
         actions.append(f"SKU {top_sku[0]['sku']} paling produktif. Pastikan stok, bahan, dan kapasitas produksi aman.")
     if weak_sku:
@@ -1018,6 +1154,10 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
             "biayaIklan": ad_spend,
             "refund": refund,
             "profitEstimasi": profit,
+            "profitFinal": final_profit,
+            "profitBelumFinal": estimated_profit,
+            "omsetFinal": final_omzet,
+            "omsetBelumFinal": estimated_omzet,
         },
         "insights": insights,
         "actions": actions[:6],
@@ -1039,7 +1179,9 @@ def telegram_message(summary):
         f"Potongan platform: Rp{rupiah(t['platformFee']):,}\n"
         f"HPP + packing: Rp{rupiah(t['hpp'] + t['packing']):,}\n"
         f"Biaya iklan: Rp{rupiah(t.get('adSpend', 0)):,}\n"
-        f"Profit estimasi: Rp{rupiah(t['profit']):,} ({t['margin']:.1f}%)\n\n"
+        f"Profit final: Rp{rupiah(t.get('finalProfit', 0)):,} ({t.get('finalMargin', 0):.1f}%)\n"
+        f"Profit belum final: Rp{rupiah(t.get('estimatedProfit', 0)):,} ({t.get('estimatedMargin', 0):.1f}%)\n"
+        f"Profit total estimasi: Rp{rupiah(t['profit']):,} ({t['margin']:.1f}%)\n\n"
         f"SKU profit tertinggi: {top['sku']} Rp{rupiah(top['profit']):,}\n"
         f"SKU perlu dicek: {weak['sku']} Rp{rupiah(weak['profit']):,}\n\n"
         f"Alert:\n{alerts}"
@@ -1175,21 +1317,42 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def owner_pin(self):
+        return self.headers.get("X-Owner-Pin", "").strip()
+
+    def require_owner(self):
+        if owner_pin_valid(self.owner_pin()):
+            return True
+        self.send_json({"ok": False, "ownerLocked": True, "error": "PIN Owner diperlukan."}, 401)
+        return False
+
     def do_GET(self):
         parsed = urllib.parse.urlparse(self.path)
         route = parsed.path
         query = urllib.parse.parse_qs(parsed.query)
-        if route in {"/", "/owner", "/tv"}:
+        if route in {"/", "/owner", "/team", "/tv"}:
             return self.send_file(ROOT / "static" / "index.html", "text/html; charset=utf-8")
         if route == "/static/styles.css":
             return self.send_file(ROOT / "static" / "styles.css", "text/css; charset=utf-8")
         if route == "/static/app.js":
             return self.send_file(ROOT / "static" / "app.js", "application/javascript; charset=utf-8")
         if route == "/api/summary":
-            return self.send_json(compute_summary(build_filters(query)))
+            role = query.get("role", ["owner"])[0] if isinstance(query.get("role"), list) else query.get("role", "owner")
+            role = role if role in {"owner", "team", "tv"} else "owner"
+            if role == "owner" and not owner_pin_valid(self.owner_pin()):
+                return self.send_json({"ok": False, "ownerLocked": True, "error": "PIN Owner diperlukan."}, 401)
+            summary = compute_summary(build_filters(query))
+            summary["accessRole"] = role
+            if role != "owner":
+                summary = redact_summary(summary, role)
+            return self.send_json(summary)
         if route == "/api/config":
             cfg = read_config()
             cfg["telegramBotToken"] = "••••••" if cfg.get("telegramBotToken") else ""
+            cfg["telegramChatId"] = "••••••" if cfg.get("telegramChatId") else ""
+            cfg["ownerPinEnabled"] = bool(cfg.get("ownerPinHash"))
+            cfg["ownerPin"] = "••••••" if cfg.get("ownerPinHash") else ""
+            cfg.pop("ownerPinHash", None)
             return self.send_json(cfg)
         self.send_error(404)
 
@@ -1197,22 +1360,34 @@ class AppHandler(BaseHTTPRequestHandler):
         route = urllib.parse.urlparse(self.path).path
         try:
             if route == "/api/import-samples":
+                if not self.require_owner():
+                    return
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
                 store_name = body.get("storeName", DEFAULT_STORE)
                 return self.send_json({"ok": True, "results": import_samples(store_name), "summary": compute_summary()})
             if route == "/api/config":
+                if not self.require_owner():
+                    return
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode())
                 current = read_config()
-                for key in ["telegramChatId", "morningTime", "alertNegativeProfit", "alertMarginBelow", "defaultStore", "stores"]:
+                for key in ["morningTime", "alertNegativeProfit", "alertMarginBelow", "defaultStore", "stores"]:
                     if key in body:
                         current[key] = body[key]
+                if body.get("telegramChatId") and body.get("telegramChatId") != "••••••":
+                    current["telegramChatId"] = body["telegramChatId"]
                 if body.get("telegramBotToken") and body.get("telegramBotToken") != "••••••":
                     current["telegramBotToken"] = body["telegramBotToken"]
+                if body.get("ownerPin") and body.get("ownerPin") != "••••••":
+                    current["ownerPinHash"] = hash_owner_pin(body["ownerPin"])
+                if body.get("clearOwnerPin"):
+                    current["ownerPinHash"] = ""
                 write_config(current)
                 return self.send_json({"ok": True})
             if route == "/api/folder-monitor":
+                if not self.require_owner():
+                    return
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode())
                 current = read_config()
@@ -1236,20 +1411,28 @@ class AppHandler(BaseHTTPRequestHandler):
                 write_config(current)
                 return self.send_json({"ok": True, "folderMonitor": monitor, "folderMonitors": current.get("folderMonitors", {})})
             if route == "/api/folder-run":
+                if not self.require_owner():
+                    return
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode() or "{}") if length else {}
                 result = run_folder_monitor(body.get("storeName"), force=True)
                 return self.send_json({"ok": True, **result, "summary": compute_summary()})
             if route == "/api/ad-spend":
+                if not self.require_owner():
+                    return
                 length = int(self.headers.get("Content-Length", "0"))
                 body = json.loads(self.rfile.read(length).decode())
                 result = save_ad_spend(body)
                 return self.send_json({"ok": True, "result": result, "summary": compute_summary()})
             if route == "/api/telegram-test":
+                if not self.require_owner():
+                    return
                 summary = compute_summary()
                 result = send_telegram(telegram_message(summary))
                 return self.send_json({"ok": True, "result": result})
             if route == "/api/upload":
+                if not self.require_owner():
+                    return
                 return self.handle_upload()
             self.send_error(404)
         except Exception as exc:

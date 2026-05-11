@@ -33,6 +33,7 @@ Jika upload berikutnya berisi nomor order yang sama, data lama diperbarui berdas
 ## Tampilan
 
 - `Owner`: menampilkan profit, HPP, potongan platform, dana tertahan, SKU terbaik, dan SKU bermasalah.
+- `Tim`: link aman `http://127.0.0.1:8787/team` untuk melihat order, omset, status, dan SKU tanpa profit/HPP/biaya rahasia.
 - `Per Toko`: membandingkan performa semua toko.
 - `TV Kantor`: tampilan aman untuk tim di link khusus `http://127.0.0.1:8787/tv`, menyembunyikan profit asli dan biaya rahasia.
 - `Upload & Otomatis`: upload data, scan folder otomatis, dan simpan pengaturan ringkasan pagi Telegram.
@@ -62,3 +63,15 @@ Buat bot di BotFather, isi `Bot Token`, lalu isi `Chat ID`. Aplikasi akan mengir
 ## Biaya iklan
 
 Masuk ke `Upload & Otomatis`, lalu isi panel `Update Biaya Iklan`. Biaya iklan dicatat per toko dan per tanggal, lalu otomatis mengurangi profit pada periode yang dipilih.
+
+## Profit final vs estimasi
+
+- `Profit Final`: order yang sudah punya pencairan atau sudah cancel/refund sehingga tidak menunggu cash-in berikutnya.
+- `Profit Belum Final`: order aktif yang belum cair, sehingga angkanya masih estimasi dan perlu direkonsiliasi saat upload pencairan berikutnya.
+- `Profit Total Estimasi`: gabungan final + belum final, sudah dikurangi biaya iklan periode yang dipilih.
+
+## Akses owner dan tim
+
+- Mode owner menampilkan profit, HPP, potongan, refund, biaya iklan, audit perubahan, dan rekomendasi finansial.
+- Mode tim dan TV meredaksi data rahasia dari API dan tampilan.
+- PIN Owner bisa diisi dari menu `Upload & Otomatis` pada panel Telegram. Jika PIN diaktifkan, akses owner akan meminta PIN.

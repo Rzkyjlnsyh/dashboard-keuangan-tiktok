@@ -1,5 +1,6 @@
 const state = {
-  view: location.pathname.includes("tv") ? "tv" : "owner",
+  view: location.pathname.includes("tv") ? "tv" : location.pathname.includes("team") ? "team" : "owner",
+  accessRole: location.pathname.includes("tv") ? "tv" : location.pathname.includes("team") ? "team" : "owner",
   summary: null,
   config: null,
   filters: { preset: "all", month: "", store: "all" },
@@ -27,30 +28,49 @@ const monthLabel = (value) => {
 
 function setView(view) {
   state.view = view;
+  state.accessRole = view === "tv" ? "tv" : view === "team" ? "team" : "owner";
   document.body.classList.toggle("tv", view === "tv");
+  document.body.classList.toggle("team", view === "team");
+  document.body.classList.toggle("restricted", state.accessRole !== "owner");
   document.querySelectorAll("nav button").forEach(btn => btn.classList.toggle("active", btn.dataset.view === view));
   el("pageTitle").textContent =
     view === "tv" ? "Monitor Operasional" :
+    view === "team" ? "Dashboard Tim" :
     view === "ops" ? "Upload & Otomatis" :
     view === "sku" ? "Detail SKU" :
     view === "stores" ? "Dashboard Per Toko" :
     "Owner Dashboard";
   el("pageSub").textContent =
     view === "tv" ? "Tampilan aman untuk tim: order, omset, status, dan SKU bergerak cepat." :
+    view === "team" ? "Mode aman untuk tim: data operasional terlihat, profit dan biaya rahasia disembunyikan." :
     view === "ops" ? "Upload data terbaru, jalankan auto update folder, dan aktifkan laporan Telegram." :
     view === "sku" ? "Cari SKU yang benar-benar menghasilkan profit dan SKU yang perlu diperbaiki." :
     view === "stores" ? "Bandingkan performa ventura, giftyours, dan custombase dalam satu layar." :
     "Profit, dana tertahan, potongan, HPP, forecast, dan rekomendasi asisten.";
-  el("trendTitle").textContent = view === "tv" ? "Omset 30 Hari" : "Omset & Profit 30 Hari";
+  el("trendTitle").textContent = state.accessRole !== "owner" ? "Omset 30 Hari" : "Omset & Profit 30 Hari";
   document.querySelectorAll(".ops-only").forEach(x => x.style.display = view === "ops" ? "grid" : "none");
   document.querySelectorAll(".stores-only").forEach(x => x.style.display = view === "stores" ? "block" : "none");
   document.querySelectorAll(".sku-only").forEach(x => x.style.display = view === "sku" ? "block" : "none");
-  if (state.summary) render(state.summary);
+  refresh().catch(err => alert(err.message));
 }
 
-async function api(path, options) {
-  const res = await fetch(path, options);
+function withOwnerPin(options = {}) {
+  const headers = new Headers(options.headers || {});
+  const pin = localStorage.getItem("pareOwnerPin") || "";
+  if (pin) headers.set("X-Owner-Pin", pin);
+  return { ...options, headers };
+}
+
+async function api(path, options, retryOwnerPin = true) {
+  const res = await fetch(path, withOwnerPin(options || {}));
   const data = await res.json();
+  if (res.status === 401 && data.ownerLocked && retryOwnerPin && state.accessRole === "owner") {
+    const pin = window.prompt("Masukkan PIN Owner");
+    if (pin) {
+      localStorage.setItem("pareOwnerPin", pin);
+      return api(path, options, false);
+    }
+  }
   if (!res.ok || data.ok === false) throw new Error(data.error || "Terjadi kesalahan");
   return data;
 }
@@ -60,6 +80,7 @@ function summaryUrl() {
   params.set("preset", state.filters.preset);
   if (state.filters.month) params.set("month", state.filters.month);
   params.set("store", state.filters.store);
+  params.set("role", state.accessRole);
   return "/api/summary?" + params.toString();
 }
 
@@ -110,7 +131,12 @@ function render(summary) {
   el("omzet").textContent = fmtCompact(t.omzet);
   el("profit").textContent = fmtCompact(t.profit);
   el("margin").textContent = `${Number(t.margin || 0).toFixed(1)}% margin`;
+  el("finalProfit").textContent = fmtCompact(t.finalProfit);
+  el("finalProfitMeta").textContent = `${num(t.finalOrders || 0)} order final · ${Number(t.finalMargin || 0).toFixed(1)}%`;
+  el("estimatedProfit").textContent = fmtCompact(t.estimatedProfit);
+  el("estimatedProfitMeta").textContent = `${num(t.estimatedOrders || 0)} order belum final · ${Number(t.estimatedMargin || 0).toFixed(1)}%`;
   el("held").textContent = fmtCompact(t.held);
+  el("heldMeta").textContent = `${num(t.heldOrders || 0)} order belum cair`;
   el("platformFee").textContent = fmtCompact(t.platformFee);
   el("adSpend").textContent = fmtCompact(t.adSpend);
   el("hpp").textContent = fmtCompact(Number(t.hpp || 0) + Number(t.packing || 0));
@@ -155,6 +181,8 @@ function renderAssistant(assistant) {
   const a = assistant.accounting;
   el("accountingBox").innerHTML = `
     <div><span>Pendapatan</span><strong>${fmt(a.pendapatan)}</strong></div>
+    <div class="secret"><span>Profit Final</span><strong>${fmt(a.profitFinal)}</strong></div>
+    <div class="secret"><span>Profit Belum Final</span><strong>${fmt(a.profitBelumFinal)}</strong></div>
     <div class="secret"><span>HPP + Packing</span><strong>${fmt(a.hppPacking)}</strong></div>
     <div class="secret"><span>Potongan</span><strong>${fmt(a.potonganPlatform)}</strong></div>
     <div class="secret"><span>Biaya Iklan</span><strong>${fmt(a.biayaIklan)}</strong></div>
@@ -183,11 +211,11 @@ function renderStores(rows) {
 }
 
 function renderTable(id, rows) {
-  const tv = state.view === "tv";
-  const head = tv
+  const restricted = state.accessRole !== "owner";
+  const head = restricted
     ? "<tr><th>SKU</th><th>Qty</th><th>Omset</th></tr>"
     : "<tr><th>SKU</th><th>Qty</th><th>Omset</th><th>Profit</th></tr>";
-  const body = rows.map(r => tv
+  const body = rows.map(r => restricted
     ? `<tr><td>${r.sku}</td><td>${num(r.qty)}</td><td>${fmt(r.omzet)}</td></tr>`
     : `<tr><td>${r.sku}<small>${r.product ? "<br>" + r.product.slice(0, 66) : ""}</small></td><td>${num(r.qty)}</td><td>${fmt(r.omzet)}</td><td>${fmt(r.profit)}</td></tr>`
   ).join("");
@@ -309,11 +337,11 @@ function drawTrend(rows) {
     ctx.beginPath(); ctx.moveTo(pad, yy); ctx.lineTo(w - pad, yy); ctx.stroke();
   }
   line("omzet", "#67d3ff");
-  if (state.view !== "tv") line("profit", "#e7b96d");
+  if (state.accessRole === "owner") line("profit", "#e7b96d");
   ctx.fillStyle = "#aeb7c6";
   ctx.font = "13px sans-serif";
   ctx.fillText("Omset", pad, 20);
-  if (state.view !== "tv") ctx.fillText("Profit", pad + 62, 20);
+  if (state.accessRole === "owner") ctx.fillText("Profit", pad + 62, 20);
   function line(key, color) {
     ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
     rows.forEach((r, i) => i ? ctx.lineTo(x(i), y(r[key])) : ctx.moveTo(x(i), y(r[key])));
@@ -367,6 +395,10 @@ function renderFolderCards(monitors) {
 document.querySelectorAll("nav button").forEach(btn => btn.addEventListener("click", () => {
   if (btn.dataset.view === "tv") {
     window.location.href = "/tv";
+    return;
+  }
+  if (btn.dataset.view === "team") {
+    window.location.href = "/team";
     return;
   }
   setView(btn.dataset.view);

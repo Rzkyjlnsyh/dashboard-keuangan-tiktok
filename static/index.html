@@ -23,6 +23,7 @@
       </div>
       <nav>
         <button class="active" data-view="owner">Owner</button>
+        <button data-view="team">Tim</button>
         <button data-view="sku">Detail SKU</button>
         <button data-view="stores">Per Toko</button>
         <button data-view="tv">TV Kantor</button>
@@ -68,8 +69,10 @@
       <section class="kpis">
         <article><span>Order Unik</span><strong id="orders">0</strong><em id="todayOrders">Hari ini 0</em></article>
         <article><span>Omset Terdata</span><strong id="omzet">Rp0</strong><em>Net dari data upload</em></article>
-        <article class="secret"><span>Profit Estimasi</span><strong id="profit">Rp0</strong><em id="margin">0%</em></article>
-        <article><span>Dana Tertahan</span><strong id="held">Rp0</strong><em>Belum cair / belum selesai</em></article>
+        <article class="secret"><span>Profit Total Estimasi</span><strong id="profit">Rp0</strong><em id="margin">0%</em></article>
+        <article class="secret"><span>Profit Final</span><strong id="finalProfit">Rp0</strong><em id="finalProfitMeta">0 order final</em></article>
+        <article class="secret"><span>Profit Belum Final</span><strong id="estimatedProfit">Rp0</strong><em id="estimatedProfitMeta">0 order belum final</em></article>
+        <article><span>Dana Tertahan</span><strong id="held">Rp0</strong><em id="heldMeta">Belum cair / belum selesai</em></article>
         <article class="secret"><span>Potongan Platform</span><strong id="platformFee">Rp0</strong><em>Fee terdeteksi</em></article>
         <article class="secret"><span>Biaya Iklan</span><strong id="adSpend">Rp0</strong><em>Manual per toko</em></article>
         <article class="secret"><span>HPP + Packing</span><strong id="hpp">Rp0</strong><em>Dari template SKU</em></article>
@@ -226,6 +229,7 @@
             <label>Bot Token <input name="telegramBotToken" placeholder="Isi token bot Telegram"></label>
             <label>Chat ID <input name="telegramChatId" placeholder="Isi chat ID Telegram"></label>
             <label>Jam kirim pagi <input name="morningTime" type="time" value="07:30"></label>
+            <label>PIN Owner <input name="ownerPin" type="password" placeholder="Opsional, untuk kunci akses owner"></label>
             <button>Simpan Pengaturan</button>
             <button type="button" id="telegramTest">Kirim Tes Telegram</button>
           </form>

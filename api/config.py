@@ -12,6 +12,19 @@ class handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        folder_monitors = {
+            store: {
+                "enabled": False,
+                "path": "",
+                "intervalMinutes": 10,
+                "storeName": store,
+                "kind": "auto",
+                "lastRun": "",
+                "lastMessage": "Auto update folder hanya tersedia di versi lokal.",
+                "fileState": {},
+            }
+            for store in ["ventura", "giftyours", "custombase"]
+        }
         self._send(
             {
                 "telegramBotToken": "",
@@ -20,21 +33,14 @@ class handler(BaseHTTPRequestHandler):
                 "alertNegativeProfit": True,
                 "alertMarginBelow": 12,
                 "lastMorningSent": "",
+                "ownerPinEnabled": False,
+                "ownerPin": "",
                 "stores": ["ventura", "giftyours", "custombase"],
                 "defaultStore": "ventura",
-                "folderMonitor": {
-                    "enabled": False,
-                    "path": "",
-                    "intervalMinutes": 10,
-                    "storeName": "ventura",
-                    "kind": "auto",
-                    "lastRun": "",
-                    "lastMessage": "Auto update folder hanya tersedia di versi lokal.",
-                    "fileState": {},
-                },
+                "folderMonitors": folder_monitors,
+                "folderMonitor": folder_monitors["ventura"],
             }
         )
 
     def do_POST(self):
         self._send({"ok": False, "error": "Pengaturan cloud preview tidak disimpan. Gunakan versi lokal."}, 400)
-

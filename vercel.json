@@ -2,7 +2,7 @@
   "rewrites": [
     { "source": "/", "destination": "/static/index.html" },
     { "source": "/owner", "destination": "/static/index.html" },
+    { "source": "/team", "destination": "/static/index.html" },
     { "source": "/tv", "destination": "/static/index.html" }
   ]
 }
-
