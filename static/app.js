@@ -35,7 +35,7 @@ const escapeHtml = (value) => String(value || "").replace(/[&<>"']/g, char => ({
   "'": "&#39;",
 }[char]));
 
-function showNotice(message, level = "warn", popup = true) {
+function showNotice(message, level = "warn", popup = false) {
   const text = message || "Terjadi kesalahan.";
   if (el("alerts")) {
     el("alerts").innerHTML = `

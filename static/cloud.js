@@ -12,7 +12,7 @@
     return rows.map(row => {
       const clean = {};
       for (const [key, value] of Object.entries(row || {})) {
-        clean[String(key || "").replace(/\n/g, " ").trim()] = formatCell(value);
+        clean[String(key || "").replace(/^\uFEFF/, "").replace(/\n/g, " ").trim()] = formatCell(value);
       }
       return clean;
     });
@@ -36,29 +36,43 @@
     if (!files.length) throw new Error("Pilih minimal satu file terlebih dahulu.");
     const storeName = form.elements.storeName.value || "ventura";
     const kind = form.elements.kind.value || "auto";
+    const submitButton = form.querySelector('button[type="submit"], button:not([type])');
+    const originalText = submitButton ? submitButton.textContent : "";
     const results = [];
-    for (const file of files) {
-      const rows = await readRows(file);
-      if (!rows.length) throw new Error(`File ${file.name} kosong atau header tidak terbaca.`);
-      for (let start = 0; start < rows.length; start += CHUNK_SIZE) {
-        const chunk = rows.slice(start, start + CHUNK_SIZE);
-        const part = Math.floor(start / CHUNK_SIZE) + 1;
-        const totalParts = Math.ceil(rows.length / CHUNK_SIZE);
-        if (notify && totalParts > 1) notify(`Memproses ${file.name} bagian ${part}/${totalParts}...`, "info", false);
-        const result = await api("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            storeName,
-            kind,
-            filename: totalParts > 1 ? `${file.name} (${part}/${totalParts})` : file.name,
-            rows: chunk,
-          }),
-        });
-        results.push(result);
+    if (submitButton) {
+      submitButton.disabled = true;
+      submitButton.textContent = "Memproses file...";
+    }
+    try {
+      for (const file of files) {
+        const rows = await readRows(file);
+        if (!rows.length) throw new Error(`File ${file.name} kosong atau header tidak terbaca.`);
+        for (let start = 0; start < rows.length; start += CHUNK_SIZE) {
+          const chunk = rows.slice(start, start + CHUNK_SIZE);
+          const part = Math.floor(start / CHUNK_SIZE) + 1;
+          const totalParts = Math.ceil(rows.length / CHUNK_SIZE);
+          if (submitButton) submitButton.textContent = `Upload ${file.name} ${part}/${totalParts}`;
+          if (notify && totalParts > 1) notify(`Memproses ${file.name} bagian ${part}/${totalParts}...`, "info", false);
+          const result = await api("/api/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              storeName,
+              kind,
+              filename: totalParts > 1 ? `${file.name} (${part}/${totalParts})` : file.name,
+              rows: chunk,
+            }),
+          });
+          results.push(result);
+        }
+      }
+      return results;
+    } finally {
+      if (submitButton) {
+        submitButton.disabled = false;
+        submitButton.textContent = originalText;
       }
     }
-    return results;
   }
 
   window.CloudFinance = { uploadForm };
