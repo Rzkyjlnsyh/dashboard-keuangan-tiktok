@@ -45,6 +45,8 @@ SECRET_TOTAL_KEYS = {
     "profitBeforeAds", "adSpend", "margin", "finalProfit", "estimatedProfit", "finalProfitBeforeAds",
     "estimatedProfitBeforeAds", "finalAdSpend", "estimatedAdSpend", "finalMargin", "estimatedMargin",
     "sellerDiscount", "cancelledAmount",
+    "bookPlatformFee", "bookHpp", "bookPacking", "bookSettlement", "bookProfit", "bookProfitBeforeAds",
+    "bookAdSpend", "bookMargin", "bookCancelledAmount",
 }
 
 
@@ -75,6 +77,14 @@ def is_unpaid_status(status):
 
 def has_income_settlement(row):
     return column_token(row["source"] or "") == "incomestatement" or "income" in column_token(row["last_seen_file"] or "") or "settlementstatement" in column_token(row["last_seen_file"] or "")
+
+
+def is_book_source(row):
+    return column_token(row["source"] or "") in {"settlement", "incomestatement"} or has_income_settlement(row)
+
+
+def actual_settlement_amount(row):
+    return abs(float(row["settlement_received"] or 0)) if has_income_settlement(row) else 0
 
 
 def rupiah(value):
@@ -408,7 +418,7 @@ def finish_import_run(conn, run_id, rows_seen, inserted, updated, unchanged, aud
     )
 
 
-def upsert_line(conn, row, kind=None, filename=None, run_id=None):
+def upsert_line(conn, row, kind=None, filename=None, run_id=None, preserve_settlement=True):
     existing = conn.execute(
         "SELECT * FROM order_lines WHERE line_key=?",
         (row["line_key"],),
@@ -425,7 +435,7 @@ def upsert_line(conn, row, kind=None, filename=None, run_id=None):
         for field in AUDIT_FIELDS:
             old_value = audit_value(field, existing[field])
             new_raw = row.get(field)
-            if field == "settlement_received":
+            if field == "settlement_received" and preserve_settlement:
                 new_raw = max(float(existing[field] or 0), float(new_raw or 0))
             new_value = audit_value(field, new_raw)
             if old_value != new_value:
@@ -456,7 +466,7 @@ def upsert_line(conn, row, kind=None, filename=None, run_id=None):
             platform_fee=excluded.platform_fee,
             refund_amount=excluded.refund_amount,
             order_amount=excluded.order_amount,
-            settlement_received=MAX(order_lines.settlement_received, excluded.settlement_received),
+            settlement_received={"MAX(order_lines.settlement_received, excluded.settlement_received)" if preserve_settlement else "excluded.settlement_received"},
             payment_method=excluded.payment_method,
             tracking_id=COALESCE(excluded.tracking_id, order_lines.tracking_id),
             last_seen_file=excluded.last_seen_file,
@@ -551,7 +561,7 @@ def import_order_excel(path, store_name=None):
                 "platform_fee": abs(float(rupiah(r.get("Biaya Layanan", 0)))) + abs(float(rupiah(r.get("Pajak", 0)))),
                 "refund_amount": abs(float(rupiah(r.get("Refund", 0)))),
                 "order_amount": float(rupiah(r.get("Total Faktur", 0) or r.get("Total Penjualan", 0))),
-                "settlement_received": float(rupiah(r.get("Penyelesaian Pembayaran", 0))),
+                "settlement_received": 0,
                 "payment_method": str(r.get("Metode Pembayaran", "")).strip(),
                 "tracking_id": str(r.get("Nomor AWB/Resi", "")).strip(),
                 "last_seen_file": Path(path).name,
@@ -622,6 +632,69 @@ def import_settlement_csv(path, store_name=None):
     return {"kind": "settlement", "storeName": selected_store, "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": unchanged, "auditCount": audit_count}
 
 
+def import_income_excel(path, store_name=None):
+    selected_store = normalize_store(store_name or DEFAULT_STORE)
+    df = pd.read_excel(path)
+    df.columns = [clean_col(c) for c in df.columns]
+    inserted = updated = unchanged = skipped = audit_count = 0
+    with connect() as conn:
+        run_id = start_import_run(conn, Path(path).name, "income", selected_store)
+        existing_rows = conn.execute("SELECT * FROM order_lines WHERE lower(store_name)=lower(?)", (selected_store,)).fetchall()
+        by_order = {}
+        for row in existing_rows:
+            by_order.setdefault(str(row["order_id"] or "").strip(), []).append(dict(row))
+        for _, r in df.iterrows():
+            transaction_id = str(r.get("Order/adjustment ID", r.get("Order adjustment ID", ""))).replace(".0", "").strip()
+            related_order = str(r.get("Related order ID", "")).replace(".0", "").strip()
+            order_id = related_order if related_order and related_order != "/" else transaction_id
+            if not order_id:
+                continue
+            existing_group = by_order.get(order_id, [])
+            if not existing_group:
+                skipped += 1
+                continue
+            income_type = str(r.get("Type", "")).strip()
+            settlement = float(rupiah(r.get("Total settlement amount", 0)))
+            total_revenue = float(rupiah(r.get("Total Revenue", 0)))
+            after_discount = float(rupiah(r.get("Subtotal after seller discounts", 0)))
+            before_discount = float(rupiah(r.get("Subtotal before discounts", 0)))
+            seller_discount = abs(float(rupiah(r.get("Seller discounts", 0))))
+            refund = abs(float(rupiah(r.get("Refund subtotal after seller discounts", 0))))
+            total_fees = abs(float(rupiah(r.get("Total Fees", 0))))
+            adjustment = float(rupiah(r.get("Ajustment amount", r.get("Adjustment amount", 0))))
+            income_settlement = max(0, settlement)
+            order_amount = abs(after_discount or total_revenue or before_discount)
+            income_fee = total_fees or (max(order_amount - income_settlement, 0) if income_settlement else 0) or (abs(settlement) if settlement < 0 else 0) or (abs(adjustment) if adjustment < 0 else 0)
+            gross_base = sum(abs(float(row.get("gross_product") or 0)) for row in existing_group) or abs(before_discount or after_discount or total_revenue) or len(existing_group) or 1
+            refund_only = bool(refund and not income_settlement and not total_revenue)
+            for current in existing_group:
+                current_gross = abs(float(current.get("gross_product") or 0))
+                current_discount = abs(float(current.get("seller_discount") or 0))
+                share = current_gross / gross_base if current_gross and gross_base else 1 / max(len(existing_group), 1)
+                row = dict(current)
+                row.update(
+                    {
+                        "updated_at": parse_dt(r.get("Order settled time")) or row.get("updated_at"),
+                        "status": (row.get("status") or "Dibatalkan") if is_cancelled_status(row.get("status")) or refund_only else ("Selesai" if column_token(income_type) == "order" and parse_dt(r.get("Order settled time")) else income_type or row.get("status") or "Income"),
+                        "gross_product": current_gross or abs(before_discount or after_discount or total_revenue) * share,
+                        "seller_discount": current_discount,
+                        "platform_fee": income_fee * share if income_fee else float(row.get("platform_fee") or 0),
+                        "refund_amount": refund or float(row.get("refund_amount") or 0),
+                        "order_amount": max(current_gross - current_discount, 0) if current_gross else (order_amount * share if order_amount else float(row.get("order_amount") or 0)),
+                        "settlement_received": income_settlement or float(row.get("settlement_received") or 0),
+                        "last_seen_file": Path(path).name,
+                        "last_seen_at": now_iso(),
+                    }
+                )
+                action, changes = upsert_line(conn, row, "income", Path(path).name, run_id, preserve_settlement=False)
+                inserted += action == "inserted"
+                updated += action == "updated"
+                unchanged += action == "unchanged"
+                audit_count += changes
+        finish_import_run(conn, run_id, len(df), inserted, updated, unchanged + skipped, audit_count, f"Income statement diperbarui; {skipped} baris tanpa order lama dilewati" if skipped else "Income statement diperbarui")
+    return {"kind": "income", "storeName": selected_store, "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": unchanged + skipped, "skipped": skipped, "auditCount": audit_count}
+
+
 def detect_and_import(path, kind="auto", store_name=DEFAULT_STORE):
     kind = str(kind or "auto")
     if kind == "sku":
@@ -630,8 +703,14 @@ def detect_and_import(path, kind="auto", store_name=DEFAULT_STORE):
         return import_order_excel(path, store_name)
     if kind in {"settlement", "pencairan"}:
         return import_settlement_csv(path, store_name)
+    if kind == "income":
+        return import_income_excel(path, store_name)
     suffix = Path(path).suffix.lower()
     if suffix == ".xlsx":
+        sample = pd.read_excel(path, nrows=1)
+        cols = set(clean_col(c) for c in sample.columns)
+        if {"Order/adjustment ID", "Total settlement amount"}.issubset(cols):
+            return import_income_excel(path, store_name)
         return import_order_excel(path, store_name)
     df = pd.read_csv(path, nrows=1)
     cols = set(clean_col(c) for c in df.columns)
@@ -694,7 +773,11 @@ def available_months():
             ORDER BY month DESC
             """
         ).fetchall()
-    return [r["month"] for r in rows if r["month"]]
+    months = [r["month"] for r in rows if r["month"]]
+    years = sorted({m[:4] for m in months if len(m) >= 4}, reverse=True)
+    if not years:
+        years = [str(date.today().year)]
+    return [f"{year}-{month:02d}" for year in years for month in range(12, 0, -1)]
 
 
 def recent_audit_events(filters=None, limit=40):
@@ -805,10 +888,15 @@ def compute_summary(filters=None):
         "finalProfit": 0, "estimatedProfit": 0, "finalProfitBeforeAds": 0, "estimatedProfitBeforeAds": 0,
         "finalAdSpend": 0, "estimatedAdSpend": 0, "finalOmzet": 0, "estimatedOmzet": 0,
         "finalOrders": set(), "estimatedOrders": set(), "heldOrders": set(), "cancelledOrders": set(),
+        "bookGross": 0, "bookSellerDiscount": 0, "bookOmzet": 0, "bookPlatformFee": 0,
+        "bookSettlement": 0, "bookHpp": 0, "bookPacking": 0, "bookRefund": 0,
+        "bookCancelledAmount": 0, "bookProfitBeforeAds": 0, "bookProfit": 0, "bookAdSpend": 0,
+        "bookOrders": set(), "bookCancelledOrders": set(),
     }
     today = date.today().isoformat()
     for order_id, order_rows in groups.items():
-        first = order_rows[0]
+        basis_rows = [r for r in order_rows if is_book_source(r)] or order_rows
+        first = basis_rows[0]
         created_day = (first["created_at"] or "")[:10] or "Tanpa tanggal"
         if start_date and created_day != "Tanpa tanggal":
             current_day = datetime.strptime(created_day, "%Y-%m-%d").date()
@@ -816,33 +904,26 @@ def compute_summary(filters=None):
                 continue
         if start_date and created_day == "Tanpa tanggal":
             continue
-        gross_sum = sum(abs(float(r["gross_product"] or 0)) for r in order_rows)
-        seller_discount_total = sum(abs(float(r["seller_discount"] or 0)) for r in order_rows)
+        gross_sum = sum(abs(float(r["gross_product"] or 0)) for r in basis_rows)
+        seller_discount_total = sum(abs(float(r["seller_discount"] or 0)) for r in basis_rows)
         product_net_total = max(gross_sum - seller_discount_total, 0)
-        line_order_total = sum(abs(float(r["order_amount"] or 0)) for r in order_rows)
-        max_order_amount = max(abs(float(r["order_amount"] or 0)) for r in order_rows)
+        line_order_total = sum(abs(float(r["order_amount"] or 0)) for r in basis_rows)
+        max_order_amount = max(abs(float(r["order_amount"] or 0)) for r in basis_rows)
         order_total = product_net_total if gross_sum else (max_order_amount or line_order_total or gross_sum)
-        settlement_total = max(
-            (
-                0
-                if str(r["source"] or "").lower() == "settlement" and not has_income_settlement(r)
-                else abs(float(r["settlement_received"] or 0))
-            )
-            for r in order_rows
-        )
-        refund_total = max(abs(float(r["refund_amount"] or 0)) for r in order_rows)
-        raw_platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in order_rows)
+        settlement_total = max(actual_settlement_amount(r) for r in basis_rows)
+        refund_total = max(abs(float(r["refund_amount"] or 0)) for r in basis_rows)
+        raw_platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in basis_rows)
         derived_platform_fee = max(order_total - settlement_total, 0) if settlement_total else 0
         platform_fee_total = max(raw_platform_fee_total, derived_platform_fee)
-        platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in order_rows)
-        packing_total = max((float(r["packing_per_unit"] or 0) for r in order_rows if float(r["quantity"] or 0) > 0), default=0)
-        cancelled = any(is_cancelled_status(r["status"]) for r in order_rows)
-        unpaid = any(is_unpaid_status(r["status"]) for r in order_rows)
+        platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in basis_rows)
+        packing_total = max((float(r["packing_per_unit"] or 0) for r in basis_rows if float(r["quantity"] or 0) > 0), default=0)
+        cancelled = any(is_cancelled_status(r["status"]) for r in basis_rows)
+        unpaid = any(is_unpaid_status(r["status"]) for r in basis_rows)
         excluded = cancelled or unpaid
         is_final = bool(settlement_total) and not excluded
         is_estimated = not settlement_total and not excluded
         totals["orders"].add(order_id)
-        totals["lines"] += len(order_rows)
+        totals["lines"] += len(basis_rows)
         if created_day == today:
             totals["todayOrders"] += 1
         daily.setdefault(created_day, {"date": created_day, "orders": set(), "omzet": 0, "profit": 0})
@@ -850,13 +931,17 @@ def compute_summary(filters=None):
         store = first["store_name"] or "TikTok"
         stores.setdefault(store, {"store": store, "orders": set(), "omzet": 0, "profit": 0})
         stores[store]["orders"].add(order_id)
-        for r in order_rows:
+        for r in basis_rows:
             status[r["status"] or "Tanpa status"] = status.get(r["status"] or "Tanpa status", 0) + 1
         if excluded:
             cancelled_value = refund_total or order_total
             totals["refund"] += cancelled_value
             totals["cancelledAmount"] += cancelled_value
             totals["cancelledOrders"].add(order_id)
+            if any(is_book_source(r) for r in basis_rows):
+                totals["bookRefund"] += cancelled_value
+                totals["bookCancelledAmount"] += cancelled_value
+                totals["bookCancelledOrders"].add(order_id)
             continue
         totals["omzet"] += order_total
         if is_final:
@@ -876,7 +961,15 @@ def compute_summary(filters=None):
             totals["heldOrders"].add(order_id)
         daily[created_day]["omzet"] += order_total
         stores[store]["omzet"] += order_total
-        for r in order_rows:
+        book_order = any(is_book_source(r) for r in basis_rows)
+        if book_order:
+            totals["bookOrders"].add(order_id)
+            totals["bookGross"] += gross_sum
+            totals["bookSellerDiscount"] += seller_discount_total
+            totals["bookOmzet"] += order_total
+            totals["bookPlatformFee"] += platform_fee_total
+            totals["bookSettlement"] += settlement_total
+        for r in basis_rows:
             qty = float(r["quantity"] or 0)
             line_gross = abs(float(r["gross_product"] or 0))
             share = (line_gross / gross_sum) if gross_sum else (1 / len(order_rows))
@@ -890,6 +983,10 @@ def compute_summary(filters=None):
             totals["hpp"] += hpp
             totals["packing"] += packing
             totals["profit"] += profit
+            if book_order:
+                totals["bookHpp"] += hpp
+                totals["bookPacking"] += packing
+                totals["bookProfitBeforeAds"] += profit
             if is_final:
                 totals["finalProfitBeforeAds"] += profit
             elif is_estimated:
@@ -942,6 +1039,8 @@ def compute_summary(filters=None):
         stores[store]["profit"] -= amount
         ad_by_store[store] = ad_by_store.get(store, 0) + amount
     totals["profitBeforeAds"] = totals["profit"]
+    totals["bookAdSpend"] = totals["adSpend"]
+    totals["bookProfit"] = totals["bookProfitBeforeAds"] - totals["bookAdSpend"]
     if totals["omzet"]:
         totals["finalAdSpend"] = totals["adSpend"] * (totals["finalOmzet"] / totals["omzet"])
         totals["estimatedAdSpend"] = totals["adSpend"] - totals["finalAdSpend"]
@@ -953,9 +1052,12 @@ def compute_summary(filters=None):
     estimated_order_count = len(totals["estimatedOrders"])
     held_order_count = len(totals["heldOrders"])
     cancelled_order_count = len(totals["cancelledOrders"])
+    book_order_count = len(totals["bookOrders"])
+    book_cancelled_order_count = len(totals["bookCancelledOrders"])
     margin = (totals["profit"] / totals["omzet"] * 100) if totals["omzet"] else 0
     final_margin = (totals["finalProfit"] / totals["finalOmzet"] * 100) if totals["finalOmzet"] else 0
     estimated_margin = (totals["estimatedProfit"] / totals["estimatedOmzet"] * 100) if totals["estimatedOmzet"] else 0
+    book_margin = (totals["bookProfit"] / totals["bookOmzet"] * 100) if totals["bookOmzet"] else 0
     daily_list = []
     for item in daily.values():
         item["orders"] = len(item["orders"])
@@ -1029,9 +1131,12 @@ def compute_summary(filters=None):
             "estimatedOrders": estimated_order_count,
             "heldOrders": held_order_count,
             "cancelledOrders": cancelled_order_count,
+            "bookOrders": book_order_count,
+            "bookCancelledOrders": book_cancelled_order_count,
             "margin": margin,
             "finalMargin": final_margin,
             "estimatedMargin": estimated_margin,
+            "bookMargin": book_margin,
         },
         "daily": sorted(daily_list, key=lambda x: x["date"])[-30:],
         "topSku": top_sku,
@@ -1141,6 +1246,11 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
     estimated_profit = float(totals.get("estimatedProfit", 0) or 0)
     final_omzet = float(totals.get("finalOmzet", 0) or 0)
     estimated_omzet = float(totals.get("estimatedOmzet", 0) or 0)
+    book_orders_raw = totals.get("bookOrders", 0) or 0
+    book_orders_count = len(book_orders_raw) if isinstance(book_orders_raw, set) else float(book_orders_raw or 0)
+    has_book = book_orders_count > 0 or float(totals.get("bookOmzet", 0) or 0) > 0
+    accounting_omzet = float(totals.get("bookOmzet", 0) or 0) if has_book else omzet
+    accounting_profit = float(totals.get("bookProfit", 0) or 0) if has_book else profit
     held_ratio = held / omzet * 100 if omzet else 0
     refund_ratio = refund / omzet * 100 if omzet else 0
     fee_ratio = platform_fee / omzet * 100 if omzet else 0
@@ -1197,22 +1307,22 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
         "forecast30Omzet": forecast_30,
         "forecast30Profit": forecast_profit,
         "accounting": {
-            "pendapatan": omzet,
-            "omzetKotor": float(totals.get("gross", 0) or 0),
-            "diskonSeller": float(totals.get("sellerDiscount", 0) or 0),
-            "omzetNet": omzet,
-            "settlementCair": float(totals.get("settlement", 0) or 0),
-            "hppPacking": hpp_total,
-            "hpp": float(totals.get("hpp", 0) or 0),
-            "packing": float(totals.get("packing", 0) or 0),
-            "potonganPlatform": platform_fee,
+            "pendapatan": accounting_omzet,
+            "omzetKotor": float(totals.get("bookGross" if has_book else "gross", 0) or 0),
+            "diskonSeller": float(totals.get("bookSellerDiscount" if has_book else "sellerDiscount", 0) or 0),
+            "omzetNet": accounting_omzet,
+            "settlementCair": float(totals.get("bookSettlement" if has_book else "settlement", 0) or 0),
+            "hppPacking": (float(totals.get("bookHpp", 0) or 0) + float(totals.get("bookPacking", 0) or 0)) if has_book else hpp_total,
+            "hpp": float(totals.get("bookHpp" if has_book else "hpp", 0) or 0),
+            "packing": float(totals.get("bookPacking" if has_book else "packing", 0) or 0),
+            "potonganPlatform": float(totals.get("bookPlatformFee" if has_book else "platformFee", 0) or 0),
             "biayaIklan": ad_spend,
             "refund": refund,
-            "returCancel": float(totals.get("cancelledAmount", 0) or 0),
-            "profitEstimasi": profit,
-            "profitFinal": final_profit,
+            "returCancel": float(totals.get("bookCancelledAmount" if has_book else "cancelledAmount", 0) or 0),
+            "profitEstimasi": accounting_profit,
+            "profitFinal": accounting_profit if has_book else final_profit,
             "profitBelumFinal": estimated_profit,
-            "omsetFinal": final_omzet,
+            "omsetFinal": accounting_omzet if has_book else final_omzet,
             "omsetBelumFinal": estimated_omzet,
         },
         "insights": insights,
@@ -1225,17 +1335,21 @@ def telegram_message(summary):
     top = summary["topSku"][0] if summary["topSku"] else {"sku": "-", "profit": 0}
     weak = summary["weakSku"][0] if summary["weakSku"] else {"sku": "-", "profit": 0}
     alerts = "\n".join([f"- {a['title']}: {a['body']}" for a in summary["alerts"]]) or "- Tidak ada alert besar"
+    has_book = float(t.get("bookOrders", 0) or 0) > 0 or float(t.get("bookOmzet", 0) or 0) > 0
+    accounting_omzet = t.get("bookOmzet") if has_book else t.get("omzet")
+    accounting_profit = t.get("bookProfit") if has_book else t.get("finalProfit")
+    accounting_margin = t.get("bookMargin") if has_book else t.get("finalMargin")
     return (
         "Ringkasan Keuangan TikTok\n"
         f"Waktu: {summary['generatedAt']}\n\n"
         f"Order unik: {t['orders']}\n"
-        f"Omset terdata: Rp{rupiah(t['omzet']):,}\n"
+        f"Omzet net akuntansi: Rp{rupiah(accounting_omzet):,}\n"
         f"Dana tertahan estimasi: Rp{rupiah(t['held']):,}\n"
-        f"Pencairan terdata: Rp{rupiah(t['settlement']):,}\n"
-        f"Potongan platform: Rp{rupiah(t['platformFee']):,}\n"
-        f"HPP + packing: Rp{rupiah(t['hpp'] + t['packing']):,}\n"
+        f"Settlement cair: Rp{rupiah(t.get('bookSettlement') if has_book else t.get('settlement')):,}\n"
+        f"Potongan platform: Rp{rupiah(t.get('bookPlatformFee') if has_book else t.get('platformFee')):,}\n"
+        f"HPP + packing: Rp{rupiah((t.get('bookHpp', 0) + t.get('bookPacking', 0)) if has_book else (t['hpp'] + t['packing'])):,}\n"
         f"Biaya iklan: Rp{rupiah(t.get('adSpend', 0)):,}\n"
-        f"Profit final: Rp{rupiah(t.get('finalProfit', 0)):,} ({t.get('finalMargin', 0):.1f}%)\n"
+        f"Profit akuntansi: Rp{rupiah(accounting_profit):,} ({accounting_margin:.1f}%)\n"
         f"Profit belum final: Rp{rupiah(t.get('estimatedProfit', 0)):,} ({t.get('estimatedMargin', 0):.1f}%)\n"
         f"Profit total estimasi: Rp{rupiah(t['profit']):,} ({t['margin']:.1f}%)\n\n"
         f"SKU profit tertinggi: {top['sku']} Rp{rupiah(top['profit']):,}\n"

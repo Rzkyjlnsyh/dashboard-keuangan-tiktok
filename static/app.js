@@ -161,21 +161,31 @@ function populateMonths(months) {
 
 function render(summary) {
   const t = summary.totals;
+  const hasBook = Number(t.bookOrders || 0) > 0 || Number(t.bookOmzet || 0) > 0;
+  const viewOmzet = hasBook ? Number(t.bookOmzet || 0) : Number(t.omzet || 0);
+  const viewProfit = hasBook ? Number(t.bookProfit || 0) : Number(t.profit || 0);
+  const viewMargin = hasBook ? Number(t.bookMargin || 0) : Number(t.margin || 0);
+  const viewPlatform = hasBook ? Number(t.bookPlatformFee || 0) : Number(t.platformFee || 0);
+  const viewHppPacking = hasBook
+    ? Number(t.bookHpp || 0) + Number(t.bookPacking || 0)
+    : Number(t.hpp || 0) + Number(t.packing || 0);
   el("generatedAt").textContent = summary.generatedAt;
   el("orders").textContent = num(t.orders);
   el("todayOrders").textContent = "Hari ini " + num(t.todayOrders);
-  el("omzet").textContent = fmtCompact(t.omzet);
-  el("profit").textContent = fmtCompact(t.profit);
-  el("margin").textContent = `${Number(t.margin || 0).toFixed(1)}% margin`;
-  el("finalProfit").textContent = fmtCompact(t.finalProfit);
-  el("finalProfitMeta").textContent = `${num(t.finalOrders || 0)} order final · ${Number(t.finalMargin || 0).toFixed(1)}%`;
+  el("omzet").textContent = fmtCompact(viewOmzet);
+  el("profit").textContent = fmtCompact(viewProfit);
+  el("margin").textContent = `${viewMargin.toFixed(1)}% margin`;
+  el("finalProfit").textContent = fmtCompact(hasBook ? viewProfit : t.finalProfit);
+  el("finalProfitMeta").textContent = hasBook
+    ? `${num(t.bookOrders || 0)} order akuntansi · ${viewMargin.toFixed(1)}%`
+    : `${num(t.finalOrders || 0)} order final · ${Number(t.finalMargin || 0).toFixed(1)}%`;
   el("estimatedProfit").textContent = fmtCompact(t.estimatedProfit);
   el("estimatedProfitMeta").textContent = `${num(t.estimatedOrders || 0)} order belum final · ${Number(t.estimatedMargin || 0).toFixed(1)}%`;
   el("held").textContent = fmtCompact(t.held);
   el("heldMeta").textContent = `${num(t.heldOrders || 0)} order belum cair`;
-  el("platformFee").textContent = fmtCompact(t.platformFee);
+  el("platformFee").textContent = fmtCompact(viewPlatform);
   el("adSpend").textContent = fmtCompact(t.adSpend);
-  el("hpp").textContent = fmtCompact(Number(t.hpp || 0) + Number(t.packing || 0));
+  el("hpp").textContent = fmtCompact(viewHppPacking);
   renderAlerts(summary.alerts);
   renderStatus(summary.status);
   renderTable("topSku", summary.topSku);
