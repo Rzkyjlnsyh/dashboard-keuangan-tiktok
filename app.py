@@ -88,6 +88,10 @@ def actual_settlement_amount(row):
     return abs(float(row["settlement_received"] or 0)) if has_income_settlement(row) else 0
 
 
+def normalize_order_id(value):
+    return str(value or "").replace("\t", "").replace("'", "").replace(".0", "").strip()
+
+
 def rupiah(value):
     try:
         return int(round(float(value or 0)))
@@ -454,7 +458,7 @@ def upsert_line(conn, row, kind=None, filename=None, run_id=None, preserve_settl
         VALUES ({",".join(["?"] * len(fields))})
         ON CONFLICT(line_key) DO UPDATE SET
             store_name=excluded.store_name,
-            source=excluded.source,
+            source={"CASE WHEN order_lines.settlement_received > excluded.settlement_received AND lower(COALESCE(order_lines.source, ''))='income_statement' THEN order_lines.source ELSE excluded.source END" if preserve_settlement else "excluded.source"},
             created_at=COALESCE(order_lines.created_at, excluded.created_at),
             updated_at=COALESCE(excluded.updated_at, order_lines.updated_at),
             status=excluded.status,
@@ -471,7 +475,7 @@ def upsert_line(conn, row, kind=None, filename=None, run_id=None, preserve_settl
             settlement_received={"MAX(order_lines.settlement_received, excluded.settlement_received)" if preserve_settlement else "excluded.settlement_received"},
             payment_method=excluded.payment_method,
             tracking_id=COALESCE(excluded.tracking_id, order_lines.tracking_id),
-            last_seen_file=excluded.last_seen_file,
+            last_seen_file={"CASE WHEN order_lines.settlement_received > excluded.settlement_received AND lower(COALESCE(order_lines.source, ''))='income_statement' THEN order_lines.last_seen_file ELSE excluded.last_seen_file END" if preserve_settlement else "excluded.last_seen_file"},
             last_seen_at=excluded.last_seen_at
         """,
         [row.get(field) for field in fields],
@@ -537,7 +541,7 @@ def import_order_excel(path, store_name=None):
     with connect() as conn:
         run_id = start_import_run(conn, Path(path).name, "orders", selected_store or "sesuai file")
         for _, r in df.iterrows():
-            order_id = str(r.get("Nomor Pesanan (di Marketplace)", "")).replace(".0", "").strip()
+            order_id = normalize_order_id(r.get("Nomor Pesanan (di Marketplace)", ""))
             sku = str(r.get("SKU Marketplace", "")).strip()
             if not order_id or not sku:
                 continue
@@ -586,7 +590,7 @@ def import_settlement_csv(path, store_name=None):
     with connect() as conn:
         run_id = start_import_run(conn, Path(path).name, "settlement", selected_store)
         for _, r in df.iterrows():
-            order_id = str(r.get("Order ID", "")).replace(".0", "").strip()
+            order_id = normalize_order_id(r.get("Order ID", ""))
             sku = str(r.get("Seller SKU", "")).strip()
             if not order_id or not sku:
                 continue
@@ -641,13 +645,13 @@ def import_income_excel(path, store_name=None):
     inserted = updated = unchanged = skipped = audit_count = 0
     with connect() as conn:
         run_id = start_import_run(conn, Path(path).name, "income", selected_store)
-        existing_rows = conn.execute("SELECT * FROM order_lines WHERE lower(store_name)=lower(?)", (selected_store,)).fetchall()
+        existing_rows = conn.execute("SELECT * FROM order_lines").fetchall()
         by_order = {}
         for row in existing_rows:
             by_order.setdefault(str(row["order_id"] or "").strip(), []).append(dict(row))
         for _, r in df.iterrows():
-            transaction_id = str(r.get("Order/adjustment ID", r.get("Order adjustment ID", ""))).replace(".0", "").strip()
-            related_order = str(r.get("Related order ID", "")).replace(".0", "").strip()
+            transaction_id = normalize_order_id(r.get("Order/adjustment ID", r.get("Order adjustment ID", "")))
+            related_order = normalize_order_id(r.get("Related order ID", ""))
             order_id = related_order if related_order and related_order != "/" else transaction_id
             if not order_id:
                 continue
@@ -675,7 +679,8 @@ def import_income_excel(path, store_name=None):
                 share = current_gross / gross_base if current_gross and gross_base else 1 / max(len(existing_group), 1)
                 row = dict(current)
                 row.update(
-                    {
+                        {
+                        "source": "income_statement",
                         "updated_at": parse_dt(r.get("Order settled time")) or row.get("updated_at"),
                         "status": (row.get("status") or "Dibatalkan") if is_cancelled_status(row.get("status")) or refund_only else ("Selesai" if column_token(income_type) == "order" and parse_dt(r.get("Order settled time")) else income_type or row.get("status") or "Income"),
                         "gross_product": current_gross or abs(before_discount or after_discount or total_revenue) * share,
