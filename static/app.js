@@ -220,13 +220,17 @@ function renderAssistant(assistant) {
   `;
   const a = assistant.accounting;
   el("accountingBox").innerHTML = `
-    <div><span>Pendapatan</span><strong>${fmt(a.pendapatan)}</strong></div>
+    <div><span>Omzet Kotor</span><strong>${fmt(a.omzetKotor ?? a.pendapatan)}</strong></div>
+    <div><span>Diskon Seller</span><strong>${fmt(a.diskonSeller || 0)}</strong></div>
+    <div><span>Omzet Net</span><strong>${fmt(a.omzetNet ?? a.pendapatan)}</strong></div>
+    <div class="secret"><span>Settlement Cair</span><strong>${fmt(a.settlementCair || 0)}</strong></div>
+    <div class="secret"><span>Potongan Platform</span><strong>${fmt(a.potonganPlatform)}</strong></div>
+    <div class="secret"><span>HPP</span><strong>${fmt(a.hpp || 0)}</strong></div>
+    <div class="secret"><span>Packing</span><strong>${fmt(a.packing || 0)}</strong></div>
+    <div class="secret"><span>Biaya Iklan</span><strong>${fmt(a.biayaIklan)}</strong></div>
+    <div><span>Retur/Cancel</span><strong>${fmt(a.returCancel ?? a.refund)}</strong></div>
     <div class="secret"><span>Profit Final</span><strong>${fmt(a.profitFinal)}</strong></div>
     <div class="secret"><span>Profit Belum Final</span><strong>${fmt(a.profitBelumFinal)}</strong></div>
-    <div class="secret"><span>HPP + Packing</span><strong>${fmt(a.hppPacking)}</strong></div>
-    <div class="secret"><span>Potongan</span><strong>${fmt(a.potonganPlatform)}</strong></div>
-    <div class="secret"><span>Biaya Iklan</span><strong>${fmt(a.biayaIklan)}</strong></div>
-    <div><span>Refund</span><strong>${fmt(a.refund)}</strong></div>
   `;
 }
 

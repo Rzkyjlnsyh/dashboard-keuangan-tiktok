@@ -44,6 +44,7 @@ SECRET_TOTAL_KEYS = {
     "platformFee", "platformDiscount", "hpp", "packing", "refund", "settlement", "profit",
     "profitBeforeAds", "adSpend", "margin", "finalProfit", "estimatedProfit", "finalProfitBeforeAds",
     "estimatedProfitBeforeAds", "finalAdSpend", "estimatedAdSpend", "finalMargin", "estimatedMargin",
+    "sellerDiscount", "cancelledAmount",
 }
 
 
@@ -58,6 +59,22 @@ def now_iso():
 
 def clean_col(value):
     return str(value).replace("\n", " ").strip()
+
+
+def column_token(value):
+    return "".join(ch for ch in clean_col(value).lower() if ch.isalnum())
+
+
+def is_cancelled_status(status):
+    return column_token(status) in {"dibatalkan", "cancellations", "cancelled", "canceled", "cancel", "returned", "returnrefund"}
+
+
+def is_unpaid_status(status):
+    return column_token(status) in {"unpaid", "belumbayar", "pendingpayment"}
+
+
+def has_income_settlement(row):
+    return column_token(row["source"] or "") == "incomestatement" or "income" in column_token(row["last_seen_file"] or "") or "settlementstatement" in column_token(row["last_seen_file"] or "")
 
 
 def rupiah(value):
@@ -570,7 +587,6 @@ def import_settlement_csv(path, store_name=None):
                 + abs(float(rupiah(r.get("Item Insurance", 0))))
             )
             status = str(r.get("Order Status", "")).strip()
-            received = float(rupiah(r.get("Order Amount", 0))) if status.lower() in {"selesai", "completed"} else 0
             row_store = selected_store or normalize_store(r.get("Warehouse Name", DEFAULT_STORE))
             row = {
                 "line_key": line_key(row_store, order_id, sku, r.get("Variation", "")),
@@ -591,7 +607,7 @@ def import_settlement_csv(path, store_name=None):
                 "platform_fee": platform_fee,
                 "refund_amount": abs(float(rupiah(r.get("Order Refund Amount", 0)))),
                 "order_amount": float(rupiah(r.get("SKU Subtotal Before Discount", 0))) - float(rupiah(r.get("SKU Seller Discount", 0))),
-                "settlement_received": received,
+                "settlement_received": 0,
                 "payment_method": str(r.get("Payment Method", "")).strip(),
                 "tracking_id": str(r.get("Tracking ID", "")).strip(),
                 "last_seen_file": Path(path).name,
@@ -783,12 +799,12 @@ def compute_summary(filters=None):
     status = {}
     missing_cost = set()
     totals = {
-        "orders": set(), "lines": 0, "qty": 0, "gross": 0, "omzet": 0, "platformFee": 0,
+        "orders": set(), "lines": 0, "qty": 0, "gross": 0, "sellerDiscount": 0, "omzet": 0, "platformFee": 0,
         "platformDiscount": 0, "hpp": 0, "packing": 0, "refund": 0, "settlement": 0, "held": 0,
-        "profit": 0, "profitBeforeAds": 0, "adSpend": 0, "todayOrders": 0,
+        "cancelledAmount": 0, "profit": 0, "profitBeforeAds": 0, "adSpend": 0, "todayOrders": 0,
         "finalProfit": 0, "estimatedProfit": 0, "finalProfitBeforeAds": 0, "estimatedProfitBeforeAds": 0,
         "finalAdSpend": 0, "estimatedAdSpend": 0, "finalOmzet": 0, "estimatedOmzet": 0,
-        "finalOrders": set(), "estimatedOrders": set(), "heldOrders": set(),
+        "finalOrders": set(), "estimatedOrders": set(), "heldOrders": set(), "cancelledOrders": set(),
     }
     today = date.today().isoformat()
     for order_id, order_rows in groups.items():
@@ -801,17 +817,47 @@ def compute_summary(filters=None):
         if start_date and created_day == "Tanpa tanggal":
             continue
         gross_sum = sum(abs(float(r["gross_product"] or 0)) for r in order_rows)
-        order_total = max(abs(float(r["order_amount"] or 0)) for r in order_rows) or gross_sum
-        settlement_total = max(abs(float(r["settlement_received"] or 0)) for r in order_rows)
+        seller_discount_total = sum(abs(float(r["seller_discount"] or 0)) for r in order_rows)
+        product_net_total = max(gross_sum - seller_discount_total, 0)
+        line_order_total = sum(abs(float(r["order_amount"] or 0)) for r in order_rows)
+        max_order_amount = max(abs(float(r["order_amount"] or 0)) for r in order_rows)
+        order_total = product_net_total if gross_sum else (max_order_amount or line_order_total or gross_sum)
+        settlement_total = max(
+            (
+                0
+                if str(r["source"] or "").lower() == "settlement" and not has_income_settlement(r)
+                else abs(float(r["settlement_received"] or 0))
+            )
+            for r in order_rows
+        )
         refund_total = max(abs(float(r["refund_amount"] or 0)) for r in order_rows)
-        platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in order_rows)
+        raw_platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in order_rows)
+        derived_platform_fee = max(order_total - settlement_total, 0) if settlement_total else 0
+        platform_fee_total = max(raw_platform_fee_total, derived_platform_fee)
         platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in order_rows)
         packing_total = max((float(r["packing_per_unit"] or 0) for r in order_rows if float(r["quantity"] or 0) > 0), default=0)
-        cancelled = any(str(r["status"]).lower() in {"dibatalkan", "cancellations", "cancelled"} for r in order_rows)
-        is_final = bool(settlement_total) or cancelled
-        is_estimated = not settlement_total and not cancelled
+        cancelled = any(is_cancelled_status(r["status"]) for r in order_rows)
+        unpaid = any(is_unpaid_status(r["status"]) for r in order_rows)
+        excluded = cancelled or unpaid
+        is_final = bool(settlement_total) and not excluded
+        is_estimated = not settlement_total and not excluded
         totals["orders"].add(order_id)
         totals["lines"] += len(order_rows)
+        if created_day == today:
+            totals["todayOrders"] += 1
+        daily.setdefault(created_day, {"date": created_day, "orders": set(), "omzet": 0, "profit": 0})
+        daily[created_day]["orders"].add(order_id)
+        store = first["store_name"] or "TikTok"
+        stores.setdefault(store, {"store": store, "orders": set(), "omzet": 0, "profit": 0})
+        stores[store]["orders"].add(order_id)
+        for r in order_rows:
+            status[r["status"] or "Tanpa status"] = status.get(r["status"] or "Tanpa status", 0) + 1
+        if excluded:
+            cancelled_value = refund_total or order_total
+            totals["refund"] += cancelled_value
+            totals["cancelledAmount"] += cancelled_value
+            totals["cancelledOrders"].add(order_id)
+            continue
         totals["omzet"] += order_total
         if is_final:
             totals["finalOrders"].add(order_id)
@@ -820,21 +866,15 @@ def compute_summary(filters=None):
             totals["estimatedOrders"].add(order_id)
             totals["estimatedOmzet"] += order_total
         totals["gross"] += gross_sum
+        totals["sellerDiscount"] += seller_discount_total
         totals["platformFee"] += platform_fee_total
         totals["platformDiscount"] += platform_discount_total
         totals["refund"] += refund_total
         totals["settlement"] += settlement_total
-        if not settlement_total and not cancelled:
+        if not settlement_total:
             totals["held"] += order_total
             totals["heldOrders"].add(order_id)
-        if created_day == today:
-            totals["todayOrders"] += 1
-        daily.setdefault(created_day, {"date": created_day, "orders": set(), "omzet": 0, "profit": 0})
-        daily[created_day]["orders"].add(order_id)
         daily[created_day]["omzet"] += order_total
-        store = first["store_name"] or "TikTok"
-        stores.setdefault(store, {"store": store, "orders": set(), "omzet": 0, "profit": 0})
-        stores[store]["orders"].add(order_id)
         stores[store]["omzet"] += order_total
         for r in order_rows:
             qty = float(r["quantity"] or 0)
@@ -889,7 +929,6 @@ def compute_summary(filters=None):
             sku[key]["refund"] += refund
             if qty and not (r["hpp_per_unit"] or r["packing_per_unit"]):
                 sku[key]["missingCost"] = True
-            status[r["status"] or "Tanpa status"] = status.get(r["status"] or "Tanpa status", 0) + 1
     ad_rows = filtered_ad_spend(filters, start_date, end_date)
     ad_by_store = {}
     for expense in ad_rows:
@@ -913,6 +952,7 @@ def compute_summary(filters=None):
     final_order_count = len(totals["finalOrders"])
     estimated_order_count = len(totals["estimatedOrders"])
     held_order_count = len(totals["heldOrders"])
+    cancelled_order_count = len(totals["cancelledOrders"])
     margin = (totals["profit"] / totals["omzet"] * 100) if totals["omzet"] else 0
     final_margin = (totals["finalProfit"] / totals["finalOmzet"] * 100) if totals["finalOmzet"] else 0
     estimated_margin = (totals["estimatedProfit"] / totals["estimatedOmzet"] * 100) if totals["estimatedOmzet"] else 0
@@ -988,6 +1028,7 @@ def compute_summary(filters=None):
             "finalOrders": final_order_count,
             "estimatedOrders": estimated_order_count,
             "heldOrders": held_order_count,
+            "cancelledOrders": cancelled_order_count,
             "margin": margin,
             "finalMargin": final_margin,
             "estimatedMargin": estimated_margin,
@@ -1062,10 +1103,17 @@ def redact_summary(summary, role="team"):
         "forecast30Profit": 0,
         "accounting": {
             "pendapatan": safe.get("totals", {}).get("omzet", 0),
+            "omzetKotor": 0,
+            "diskonSeller": 0,
+            "omzetNet": safe.get("totals", {}).get("omzet", 0),
+            "settlementCair": 0,
             "hppPacking": 0,
+            "hpp": 0,
+            "packing": 0,
             "potonganPlatform": 0,
             "biayaIklan": 0,
             "refund": 0,
+            "returCancel": 0,
             "profitEstimasi": 0,
             "profitFinal": 0,
             "profitBelumFinal": 0,
@@ -1150,10 +1198,17 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
         "forecast30Profit": forecast_profit,
         "accounting": {
             "pendapatan": omzet,
+            "omzetKotor": float(totals.get("gross", 0) or 0),
+            "diskonSeller": float(totals.get("sellerDiscount", 0) or 0),
+            "omzetNet": omzet,
+            "settlementCair": float(totals.get("settlement", 0) or 0),
             "hppPacking": hpp_total,
+            "hpp": float(totals.get("hpp", 0) or 0),
+            "packing": float(totals.get("packing", 0) or 0),
             "potonganPlatform": platform_fee,
             "biayaIklan": ad_spend,
             "refund": refund,
+            "returCancel": float(totals.get("cancelledAmount", 0) or 0),
             "profitEstimasi": profit,
             "profitFinal": final_profit,
             "profitBelumFinal": estimated_profit,
