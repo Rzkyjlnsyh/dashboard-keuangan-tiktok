@@ -47,6 +47,7 @@ SECRET_TOTAL_KEYS = {
     "sellerDiscount", "cancelledAmount",
     "bookPlatformFee", "bookHpp", "bookPacking", "bookSettlement", "bookProfit", "bookProfitBeforeAds",
     "bookAdSpend", "bookMargin", "bookCancelledAmount",
+    "bookHeld",
 }
 
 
@@ -97,8 +98,9 @@ def rupiah(value):
 def parse_dt(value):
     if pd.isna(value) or value == "":
         return None
-    dayfirst = isinstance(value, str) and "/" in value
-    parsed = pd.to_datetime(value, errors="coerce", dayfirst=dayfirst)
+    raw = value.strip() if isinstance(value, str) else value
+    dayfirst = isinstance(raw, str) and "/" in raw and not raw[:4].isdigit()
+    parsed = pd.to_datetime(raw, errors="coerce", dayfirst=dayfirst)
     if pd.isna(parsed):
         return None
     return parsed.strftime("%Y-%m-%d %H:%M:%S")
@@ -890,9 +892,10 @@ def compute_summary(filters=None):
         "finalOrders": set(), "estimatedOrders": set(), "heldOrders": set(), "cancelledOrders": set(),
         "bookGross": 0, "bookSellerDiscount": 0, "bookOmzet": 0, "bookPlatformFee": 0,
         "bookSettlement": 0, "bookHpp": 0, "bookPacking": 0, "bookRefund": 0,
-        "bookCancelledAmount": 0, "bookProfitBeforeAds": 0, "bookProfit": 0, "bookAdSpend": 0,
+        "bookCancelledAmount": 0, "bookHeld": 0, "bookProfitBeforeAds": 0, "bookProfit": 0, "bookAdSpend": 0,
         "bookOrders": set(), "bookCancelledOrders": set(),
     }
+    book_missing_cost = set()
     today = date.today().isoformat()
     for order_id, order_rows in groups.items():
         basis_rows = [r for r in order_rows if is_book_source(r)] or order_rows
@@ -995,6 +998,8 @@ def compute_summary(filters=None):
             stores[store]["profit"] += profit
             if qty and not (r["hpp_per_unit"] or r["packing_per_unit"]):
                 missing_cost.add(r["sku"])
+                if book_order:
+                    book_missing_cost.add(r["sku"])
             key = r["sku"] or "Tanpa SKU"
             sku.setdefault(
                 key,
@@ -1040,6 +1045,7 @@ def compute_summary(filters=None):
         ad_by_store[store] = ad_by_store.get(store, 0) + amount
     totals["profitBeforeAds"] = totals["profit"]
     totals["bookAdSpend"] = totals["adSpend"]
+    totals["bookHeld"] = max(totals["bookOmzet"] - totals["bookPlatformFee"] - totals["bookSettlement"], 0)
     totals["bookProfit"] = totals["bookProfitBeforeAds"] - totals["bookAdSpend"]
     if totals["omzet"]:
         totals["finalAdSpend"] = totals["adSpend"] * (totals["finalOmzet"] / totals["omzet"])
@@ -1058,6 +1064,7 @@ def compute_summary(filters=None):
     final_margin = (totals["finalProfit"] / totals["finalOmzet"] * 100) if totals["finalOmzet"] else 0
     estimated_margin = (totals["estimatedProfit"] / totals["estimatedOmzet"] * 100) if totals["estimatedOmzet"] else 0
     book_margin = (totals["bookProfit"] / totals["bookOmzet"] * 100) if totals["bookOmzet"] else 0
+    primary_margin = book_margin if book_order_count else margin
     daily_list = []
     for item in daily.values():
         item["orders"] = len(item["orders"])
@@ -1113,15 +1120,19 @@ def compute_summary(filters=None):
         for r in conn.execute("SELECT * FROM import_runs ORDER BY id DESC LIMIT 8").fetchall():
             recent_runs.append(dict(r))
     alerts = []
-    if totals["profit"] < 0:
+    primary_profit = totals["bookProfit"] if book_order_count else totals["profit"]
+    if primary_profit < 0:
         alerts.append({"level": "danger", "title": "Profit total negatif", "body": "Perlu cek HPP, potongan, dan SKU rugi."})
-    if totals["omzet"] and margin < 12:
-        alerts.append({"level": "warn", "title": "Margin tipis", "body": f"Margin bersih sementara {margin:.1f}%."})
-    if totals["adSpend"] and totals["omzet"] and totals["adSpend"] / totals["omzet"] > 0.2:
+    primary_omzet = totals["bookOmzet"] if book_order_count else totals["omzet"]
+    if primary_omzet and primary_margin < 12:
+        margin_text = f"{primary_margin:.2f}" if 0 < abs(primary_margin) < 1 else f"{primary_margin:.1f}"
+        alerts.append({"level": "warn", "title": "Margin tipis", "body": f"Margin bersih sementara {margin_text}%."})
+    if totals["adSpend"] and primary_omzet and totals["adSpend"] / primary_omzet > 0.2:
         alerts.append({"level": "warn", "title": "Biaya iklan tinggi", "body": "Biaya iklan lebih dari 20% omset periode ini."})
-    if missing_cost:
-        alerts.append({"level": "warn", "title": "Ada SKU tanpa HPP", "body": f"{len(missing_cost)} SKU belum punya HPP/packing."})
-    assistant = build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
+    missing_for_alert = book_missing_cost if len(totals["bookOrders"]) else missing_cost
+    if missing_for_alert:
+        alerts.append({"level": "warn", "title": "Ada SKU tanpa HPP", "body": f"{len(missing_for_alert)} SKU belum punya HPP/packing."})
+    assistant = build_assistant(totals, primary_margin, top_sku, weak_sku, missing_for_alert, daily_list)
     return {
         "generatedAt": now_iso(),
         "totals": {
@@ -1217,8 +1228,11 @@ def redact_summary(summary, role="team"):
             "packing": 0,
             "potonganPlatform": 0,
             "biayaIklan": 0,
+            "totalBiaya": 0,
+            "danaTertahan": 0,
             "refund": 0,
             "returCancel": 0,
+            "profitBersih": 0,
             "profitEstimasi": 0,
             "profitFinal": 0,
             "profitBelumFinal": 0,
@@ -1235,12 +1249,8 @@ def redact_summary(summary, role="team"):
 
 
 def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list):
-    omzet = float(totals["omzet"] or 0)
     profit = float(totals["profit"] or 0)
-    held = float(totals["held"] or 0)
     hpp_total = float(totals["hpp"] or 0) + float(totals["packing"] or 0)
-    refund = float(totals["refund"] or 0)
-    platform_fee = float(totals["platformFee"] or 0)
     ad_spend = float(totals["adSpend"] or 0)
     final_profit = float(totals.get("finalProfit", 0) or 0)
     estimated_profit = float(totals.get("estimatedProfit", 0) or 0)
@@ -1249,6 +1259,10 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
     book_orders_raw = totals.get("bookOrders", 0) or 0
     book_orders_count = len(book_orders_raw) if isinstance(book_orders_raw, set) else float(book_orders_raw or 0)
     has_book = book_orders_count > 0 or float(totals.get("bookOmzet", 0) or 0) > 0
+    omzet = float(totals.get("bookOmzet", 0) or 0) if has_book else float(totals["omzet"] or 0)
+    held = float(totals.get("bookHeld", 0) or 0) if has_book else float(totals["held"] or 0)
+    refund = float(totals.get("bookCancelledAmount", 0) or 0) if has_book else float(totals["refund"] or 0)
+    platform_fee = float(totals.get("bookPlatformFee", 0) or 0) if has_book else float(totals["platformFee"] or 0)
     accounting_omzet = float(totals.get("bookOmzet", 0) or 0) if has_book else omzet
     accounting_profit = float(totals.get("bookProfit", 0) or 0) if has_book else profit
     held_ratio = held / omzet * 100 if omzet else 0
@@ -1274,12 +1288,13 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
     forecast_profit = forecast_30 * (margin / 100) if omzet else 0
     insights = []
     actions = []
+    margin_text = f"{margin:.2f}" if 0 < abs(margin) < 1 else f"{margin:.1f}"
     if margin >= 30:
-        insights.append(f"Margin estimasi kuat di {margin:.1f}%. Bisnis terlihat sehat, selama HPP semua SKU sudah lengkap.")
+        insights.append(f"Margin bersih kuat di {margin_text}%. Bisnis terlihat sehat, selama HPP semua SKU sudah lengkap.")
     elif margin >= 15:
-        insights.append(f"Margin estimasi sedang di {margin:.1f}%. Masih sehat, tapi ruang salah harga dan promo mulai sempit.")
+        insights.append(f"Margin bersih sedang di {margin_text}%. Masih sehat, tapi ruang salah harga dan promo mulai sempit.")
     else:
-        insights.append(f"Margin estimasi tipis di {margin:.1f}%. Ini perlu dipantau sebelum menaikkan budget iklan atau diskon.")
+        insights.append(f"Margin bersih tipis di {margin_text}%. Ini perlu dipantau sebelum menaikkan budget iklan atau diskon.")
     if held_ratio > 30:
         insights.append(f"Dana tertahan sekitar {held_ratio:.1f}% dari omset terdata. Arus kas perlu dicek dari order yang belum cair.")
         actions.append("Prioritaskan cek order belum selesai/cair supaya kas harian tidak terlihat semu.")
@@ -1294,7 +1309,7 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
             actions.append("Turunkan atau evaluasi campaign iklan yang ROAS/profit SKU-nya belum jelas.")
     if missing_cost:
         actions.append(f"Lengkapi HPP untuk {len(missing_cost)} SKU agar profit tidak terlalu optimistis.")
-    if estimated_omzet > final_omzet:
+    if not has_book and estimated_omzet > final_omzet:
         insights.append("Porsi profit estimasi masih lebih besar dari profit final, jadi keputusan cashflow sebaiknya menunggu pencairan berikutnya.")
         actions.append("Pantau daftar order belum cair dan bandingkan dengan pencairan upload berikutnya.")
     if top_sku:
@@ -1317,8 +1332,11 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
             "packing": float(totals.get("bookPacking" if has_book else "packing", 0) or 0),
             "potonganPlatform": float(totals.get("bookPlatformFee" if has_book else "platformFee", 0) or 0),
             "biayaIklan": ad_spend,
-            "refund": refund,
+            "totalBiaya": ((float(totals.get("bookHpp", 0) or 0) + float(totals.get("bookPacking", 0) or 0)) if has_book else hpp_total) + ad_spend,
+            "danaTertahan": float(totals.get("bookHeld" if has_book else "held", 0) or 0),
+            "refund": float(totals.get("bookCancelledAmount", 0) or 0) if has_book else refund,
             "returCancel": float(totals.get("bookCancelledAmount" if has_book else "cancelledAmount", 0) or 0),
+            "profitBersih": accounting_profit,
             "profitEstimasi": accounting_profit,
             "profitFinal": accounting_profit if has_book else final_profit,
             "profitBelumFinal": estimated_profit,
@@ -1343,15 +1361,14 @@ def telegram_message(summary):
         "Ringkasan Keuangan TikTok\n"
         f"Waktu: {summary['generatedAt']}\n\n"
         f"Order unik: {t['orders']}\n"
-        f"Omzet net akuntansi: Rp{rupiah(accounting_omzet):,}\n"
-        f"Dana tertahan estimasi: Rp{rupiah(t['held']):,}\n"
+        f"Omzet net: Rp{rupiah(accounting_omzet):,}\n"
+        f"Dana tertahan: Rp{rupiah(t.get('bookHeld') if has_book else t.get('held')):,}\n"
         f"Settlement cair: Rp{rupiah(t.get('bookSettlement') if has_book else t.get('settlement')):,}\n"
         f"Potongan platform: Rp{rupiah(t.get('bookPlatformFee') if has_book else t.get('platformFee')):,}\n"
         f"HPP + packing: Rp{rupiah((t.get('bookHpp', 0) + t.get('bookPacking', 0)) if has_book else (t['hpp'] + t['packing'])):,}\n"
         f"Biaya iklan: Rp{rupiah(t.get('adSpend', 0)):,}\n"
-        f"Profit akuntansi: Rp{rupiah(accounting_profit):,} ({accounting_margin:.1f}%)\n"
-        f"Profit belum final: Rp{rupiah(t.get('estimatedProfit', 0)):,} ({t.get('estimatedMargin', 0):.1f}%)\n"
-        f"Profit total estimasi: Rp{rupiah(t['profit']):,} ({t['margin']:.1f}%)\n\n"
+        f"Profit bersih: Rp{rupiah(accounting_profit):,} ({accounting_margin:.1f}%)\n"
+        f"Profit estimasi operasional: Rp{rupiah(t['profit']):,} ({t['margin']:.1f}%)\n\n"
         f"SKU profit tertinggi: {top['sku']} Rp{rupiah(top['profit']):,}\n"
         f"SKU perlu dicek: {weak['sku']} Rp{rupiah(weak['profit']):,}\n\n"
         f"Alert:\n{alerts}"

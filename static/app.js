@@ -21,6 +21,11 @@ const fmtCompact = (n) => {
   return fmt(value);
 };
 const num = (n) => Math.round(Number(n || 0)).toLocaleString("id-ID");
+const pct = (n) => {
+  const value = Number(n || 0);
+  const digits = Math.abs(value) > 0 && Math.abs(value) < 1 ? 2 : 1;
+  return `${value.toFixed(digits)}%`;
+};
 const monthNames = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
 const monthLabel = (value) => {
   if (!value || !value.includes("-")) return "Pilih bulan";
@@ -162,30 +167,37 @@ function populateMonths(months) {
 function render(summary) {
   const t = summary.totals;
   const hasBook = Number(t.bookOrders || 0) > 0 || Number(t.bookOmzet || 0) > 0;
+  const viewOrders = hasBook ? Number(t.bookOrders || 0) : Number(t.orders || 0);
+  const viewGross = hasBook ? Number(t.bookGross || 0) : Number(t.gross || 0);
+  const viewDiscount = hasBook ? Number(t.bookSellerDiscount || 0) : Number(t.sellerDiscount || 0);
   const viewOmzet = hasBook ? Number(t.bookOmzet || 0) : Number(t.omzet || 0);
   const viewProfit = hasBook ? Number(t.bookProfit || 0) : Number(t.profit || 0);
   const viewMargin = hasBook ? Number(t.bookMargin || 0) : Number(t.margin || 0);
   const viewPlatform = hasBook ? Number(t.bookPlatformFee || 0) : Number(t.platformFee || 0);
+  const viewSettlement = hasBook ? Number(t.bookSettlement || 0) : Number(t.settlement || 0);
+  const viewHeld = hasBook ? Number(t.bookHeld || 0) : Number(t.held || 0);
   const viewHppPacking = hasBook
     ? Number(t.bookHpp || 0) + Number(t.bookPacking || 0)
     : Number(t.hpp || 0) + Number(t.packing || 0);
   el("generatedAt").textContent = summary.generatedAt;
-  el("orders").textContent = num(t.orders);
-  el("todayOrders").textContent = "Hari ini " + num(t.todayOrders);
-  el("omzet").textContent = fmtCompact(viewOmzet);
-  el("profit").textContent = fmtCompact(viewProfit);
-  el("margin").textContent = `${viewMargin.toFixed(1)}% margin`;
-  el("finalProfit").textContent = fmtCompact(hasBook ? viewProfit : t.finalProfit);
-  el("finalProfitMeta").textContent = hasBook
-    ? `${num(t.bookOrders || 0)} order akuntansi · ${viewMargin.toFixed(1)}%`
-    : `${num(t.finalOrders || 0)} order final · ${Number(t.finalMargin || 0).toFixed(1)}%`;
-  el("estimatedProfit").textContent = fmtCompact(t.estimatedProfit);
-  el("estimatedProfitMeta").textContent = `${num(t.estimatedOrders || 0)} order belum final · ${Number(t.estimatedMargin || 0).toFixed(1)}%`;
-  el("held").textContent = fmtCompact(t.held);
-  el("heldMeta").textContent = `${num(t.heldOrders || 0)} order belum cair`;
+  el("orders").textContent = num(viewOrders);
+  el("todayOrders").textContent = hasBook ? `Retur/cancel ${num(t.bookCancelledOrders || 0)}` : "Hari ini " + num(t.todayOrders);
+  el("omzet").textContent = fmtCompact(viewGross);
+  el("profit").textContent = fmtCompact(viewDiscount);
+  el("margin").textContent = "Diskon seller";
+  el("finalProfit").textContent = fmtCompact(viewOmzet);
+  el("finalProfitMeta").textContent = "Kotor - diskon seller";
+  el("estimatedProfit").textContent = fmtCompact(viewSettlement);
+  el("estimatedProfitMeta").textContent = hasBook ? "Dari income statement" : `${num(t.finalOrders || 0)} order cair`;
+  el("held").textContent = fmtCompact(viewHeld);
+  el("heldMeta").textContent = hasBook ? "Omzet net - platform - settlement" : `${num(t.heldOrders || 0)} order belum cair`;
   el("platformFee").textContent = fmtCompact(viewPlatform);
   el("adSpend").textContent = fmtCompact(t.adSpend);
   el("hpp").textContent = fmtCompact(viewHppPacking);
+  const bookProfitEl = document.getElementById("bookProfit");
+  if (bookProfitEl) bookProfitEl.textContent = fmtCompact(viewProfit);
+  const bookProfitMetaEl = document.getElementById("bookProfitMeta");
+  if (bookProfitMetaEl) bookProfitMetaEl.textContent = `${pct(viewMargin)} margin`;
   renderAlerts(summary.alerts);
   renderStatus(summary.status);
   renderTable("topSku", summary.topSku);
@@ -238,9 +250,10 @@ function renderAssistant(assistant) {
     <div class="secret"><span>HPP</span><strong>${fmt(a.hpp || 0)}</strong></div>
     <div class="secret"><span>Packing</span><strong>${fmt(a.packing || 0)}</strong></div>
     <div class="secret"><span>Biaya Iklan</span><strong>${fmt(a.biayaIklan)}</strong></div>
+    <div class="secret"><span>Total HPP + Packing + Iklan</span><strong>${fmt(a.totalBiaya || 0)}</strong></div>
     <div><span>Retur/Cancel</span><strong>${fmt(a.returCancel ?? a.refund)}</strong></div>
-    <div class="secret"><span>Profit Final</span><strong>${fmt(a.profitFinal)}</strong></div>
-    <div class="secret"><span>Profit Belum Final</span><strong>${fmt(a.profitBelumFinal)}</strong></div>
+    <div><span>Dana Tertahan</span><strong>${fmt(a.danaTertahan || 0)}</strong></div>
+    <div class="secret"><span>Profit Bersih</span><strong>${fmt(a.profitBersih ?? a.profitFinal)}</strong></div>
   `;
 }
 
