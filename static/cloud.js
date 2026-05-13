@@ -23,11 +23,11 @@
       throw new Error("Library pembaca Excel belum siap. Coba refresh halaman Vercel, lalu upload ulang.");
     }
     const buffer = await file.arrayBuffer();
-    const workbook = window.XLSX.read(buffer, { type: "array", cellDates: true, raw: false });
-    const sheetName = workbook.SheetNames.includes("Daftar Pesanan") ? "Daftar Pesanan" : workbook.SheetNames[0];
+    const workbook = window.XLSX.read(buffer, { type: "array", cellDates: true, raw: false, nodim: true, sheetRows: 0 });
+    const sheetName = pickSheet(workbook);
     if (!sheetName) throw new Error(`File ${file.name} tidak memiliki sheet yang bisa dibaca.`);
     const sheet = workbook.Sheets[sheetName];
-    const range = window.XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
+    const range = getSheetRange(sheet);
     const cellText = (row, col) => {
       const cell = sheet[window.XLSX.utils.encode_cell({ r: row, c: col })];
       if (!cell) return "";
@@ -51,6 +51,37 @@
       if (hasValue) rows.push(row);
     }
     return cleanRows(rows);
+  }
+
+  function getSheetRange(sheet) {
+    const cells = Object.keys(sheet || {})
+      .filter(key => key && key[0] !== "!")
+      .map(key => window.XLSX.utils.decode_cell(key));
+    if (!cells.length) return window.XLSX.utils.decode_range("A1:A1");
+    return cells.reduce((range, cell) => ({
+      s: { r: Math.min(range.s.r, cell.r), c: Math.min(range.s.c, cell.c) },
+      e: { r: Math.max(range.e.r, cell.r), c: Math.max(range.e.c, cell.c) },
+    }), { s: { ...cells[0] }, e: { ...cells[0] } });
+  }
+
+  function sheetHeaderTokens(sheet) {
+    const range = getSheetRange(sheet);
+    const tokens = [];
+    for (let col = range.s.c; col <= range.e.c; col += 1) {
+      const cell = sheet[window.XLSX.utils.encode_cell({ r: range.s.r, c: col })];
+      const value = cell && (cell.w != null ? cell.w : cell.v);
+      tokens.push(String(value || "").toLowerCase().replace(/[^a-z0-9]+/g, ""));
+    }
+    return tokens.join("|");
+  }
+
+  function pickSheet(workbook) {
+    if (workbook.SheetNames.includes("Daftar Pesanan")) return "Daftar Pesanan";
+    const incomeSheet = workbook.SheetNames.find(name => {
+      const tokens = sheetHeaderTokens(workbook.Sheets[name]);
+      return tokens.includes("orderadjustmentid") && tokens.includes("totalsettlementamount");
+    });
+    return incomeSheet || workbook.SheetNames[0];
   }
 
   async function uploadForm(form, api, notify) {

@@ -119,7 +119,7 @@ async function api(path, options, retryOwnerPin = true) {
 function summaryUrl() {
   const params = new URLSearchParams();
   params.set("preset", state.filters.preset);
-  if (state.filters.month) params.set("month", state.filters.month);
+  if (state.filters.preset === "month" && state.filters.month) params.set("month", state.filters.month);
   params.set("store", state.filters.store);
   params.set("role", state.accessRole);
   return "/api/summary?" + params.toString();
@@ -153,14 +153,19 @@ function populateStores(stores) {
 function populateMonths(months) {
   const monthSelect = el("monthFilter");
   const previous = state.filters.month || monthSelect.value;
-  monthSelect.innerHTML = months.length
-    ? months.map(month => `<option value="${month}">${monthLabel(month)}</option>`).join("")
-    : `<option value="">Belum ada data bulan</option>`;
+  monthSelect.innerHTML = `<option value="">Semua bulan</option>` + (
+    months.length
+      ? months.map(month => `<option value="${month}">${monthLabel(month)}</option>`).join("")
+      : ""
+  );
   if (previous && months.includes(previous)) {
     monthSelect.value = previous;
-  } else if (months.length) {
+  } else if (state.filters.preset === "month" && months.length) {
     monthSelect.value = months[0];
-    if (!state.filters.month) state.filters.month = months[0];
+    state.filters.month = months[0];
+  } else {
+    monthSelect.value = "";
+    state.filters.month = "";
   }
 }
 
@@ -491,13 +496,19 @@ document.querySelectorAll("[data-preset]").forEach(btn => btn.addEventListener("
   document.querySelectorAll("[data-preset]").forEach(x => x.classList.remove("active"));
   btn.classList.add("active");
   state.filters.preset = btn.dataset.preset;
-  if (btn.dataset.preset === "month" && el("monthFilter").value) state.filters.month = el("monthFilter").value;
+  if (btn.dataset.preset === "month") {
+    state.filters.month = el("monthFilter").value || (state.summary && state.summary.availableMonths && state.summary.availableMonths[0]) || "";
+    if (state.filters.month) el("monthFilter").value = state.filters.month;
+  } else {
+    state.filters.month = "";
+    el("monthFilter").value = "";
+  }
   await refresh();
 }));
 el("monthFilter").addEventListener("change", async (event) => {
   state.filters.month = event.target.value;
-  state.filters.preset = "month";
-  document.querySelectorAll("[data-preset]").forEach(x => x.classList.toggle("active", x.dataset.preset === "month"));
+  state.filters.preset = state.filters.month ? "month" : "all";
+  document.querySelectorAll("[data-preset]").forEach(x => x.classList.toggle("active", x.dataset.preset === state.filters.preset));
   await refresh();
 });
 el("storeFilter").addEventListener("change", async (event) => {
