@@ -58,6 +58,9 @@ create table if not exists public.finance_ad_spend (
 
 create index if not exists finance_ad_spend_store_date_idx on public.finance_ad_spend (store_name, spend_date);
 
+-- Unique constraint untuk upsert: 1 baris per store+date+channel+campaign
+alter table public.finance_ad_spend add constraint finance_ad_spend_unique_row unique (store_name, spend_date, channel, coalesce(campaign, ''));
+
 create table if not exists public.finance_import_runs (
   id bigserial primary key,
   filename text,
