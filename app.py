@@ -771,10 +771,6 @@ def available_months():
                 SELECT substr(created_at, 1, 7) month
                 FROM order_lines
                 WHERE created_at IS NOT NULL AND created_at != ''
-                UNION
-                SELECT substr(spend_date, 1, 7) month
-                FROM ad_spend
-                WHERE spend_date IS NOT NULL AND spend_date != ''
             )
             GROUP BY month
             ORDER BY month DESC
