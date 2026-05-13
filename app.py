@@ -533,6 +533,15 @@ def import_sku(path, store_name="global"):
     return {"kind": "sku", "storeName": store_name, "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": 0, "auditCount": 0}
 
 
+def dedup_rows_by_line_key(rows):
+    """Deduplikasi berdasarkan line_key, keep row terakhir dalam file (paling update)."""
+    seen = {}
+    for row in rows:
+        key = row["line_key"]
+        seen[key] = row  # Terakhir menang
+    return list(seen.values()), len(rows) - len(seen)
+
+
 def import_order_excel(path, store_name=None):
     selected_store = normalize_store(store_name) if store_name else None
     df = pd.read_excel(path, sheet_name="Daftar Pesanan")
@@ -540,6 +549,8 @@ def import_order_excel(path, store_name=None):
     inserted = updated = unchanged = audit_count = 0
     with connect() as conn:
         run_id = start_import_run(conn, Path(path).name, "orders", selected_store or "sesuai file")
+        # Build all rows first, then dedup
+        all_rows = []
         for _, r in df.iterrows():
             order_id = normalize_order_id(r.get("Nomor Pesanan (di Marketplace)", ""))
             sku = str(r.get("SKU Marketplace", "")).strip()
@@ -573,13 +584,19 @@ def import_order_excel(path, store_name=None):
                 "last_seen_file": Path(path).name,
                 "last_seen_at": now_iso(),
             }
+            all_rows.append(row)
+        # Dedup before upsert
+        deduped_rows, dup_count = dedup_rows_by_line_key(all_rows)
+        if dup_count:
+            print(f"   ⚠️  {dup_count} baris duplikat dalam file di-dedup (keep baris terakhir)")
+        for row in deduped_rows:
             action, changes = upsert_line(conn, row, "orders", Path(path).name, run_id)
             inserted += action == "inserted"
             updated += action == "updated"
             unchanged += action == "unchanged"
             audit_count += changes
-        finish_import_run(conn, run_id, len(df), inserted, updated, unchanged, audit_count, "Order Desty diperbarui")
-    return {"kind": "orders", "storeName": selected_store or "sesuai file", "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": unchanged, "auditCount": audit_count}
+        finish_import_run(conn, run_id, len(all_rows), inserted, updated, unchanged, audit_count, "Order Desty diperbarui")
+    return {"kind": "orders", "storeName": selected_store or "sesuai file", "rows": len(all_rows), "inserted": inserted, "updated": updated, "unchanged": unchanged, "auditCount": audit_count}
 
 
 def import_settlement_csv(path, store_name=None):
@@ -589,6 +606,8 @@ def import_settlement_csv(path, store_name=None):
     inserted = updated = unchanged = audit_count = 0
     with connect() as conn:
         run_id = start_import_run(conn, Path(path).name, "settlement", selected_store)
+        # Build all rows first, then dedup
+        all_rows = []
         for _, r in df.iterrows():
             order_id = normalize_order_id(r.get("Order ID", ""))
             sku = str(r.get("Seller SKU", "")).strip()
@@ -629,13 +648,19 @@ def import_settlement_csv(path, store_name=None):
                 "last_seen_file": Path(path).name,
                 "last_seen_at": now_iso(),
             }
+            all_rows.append(row)
+        # Dedup before upsert
+        deduped_rows, dup_count = dedup_rows_by_line_key(all_rows)
+        if dup_count:
+            print(f"   ⚠️  {dup_count} baris duplikat dalam file settlement di-dedup")
+        for row in deduped_rows:
             action, changes = upsert_line(conn, row, "settlement", Path(path).name, run_id)
             inserted += action == "inserted"
             updated += action == "updated"
             unchanged += action == "unchanged"
             audit_count += changes
-        finish_import_run(conn, run_id, len(df), inserted, updated, unchanged, audit_count, "Pencairan/status marketplace diperbarui")
-    return {"kind": "settlement", "storeName": selected_store, "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": unchanged, "auditCount": audit_count}
+        finish_import_run(conn, run_id, len(all_rows), inserted, updated, unchanged, audit_count, "Pencairan/status marketplace diperbarui")
+    return {"kind": "settlement", "storeName": selected_store, "rows": len(all_rows), "inserted": inserted, "updated": updated, "unchanged": unchanged, "auditCount": audit_count}
 
 
 def import_income_excel(path, store_name=None):

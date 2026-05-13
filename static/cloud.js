@@ -99,8 +99,36 @@
     }
     try {
       for (const file of files) {
-        const rows = await readRows(file);
+        let rows = await readRows(file);
         if (!rows.length) throw new Error(`File ${file.name} kosong atau header tidak terbaca.`);
+        // Dedup by generating a rough hash of row content — remove exact duplicates
+        const seen = new Set();
+        const deduped = [];
+        for (const row of rows) {
+          const hash = JSON.stringify(Object.values(row).sort());
+          // Build key from critical fields if possible
+          const orderId = (row["Nomor Pesanan (di Marketplace)"] || row["Order ID"] || row["Order/adjustment ID"] || "").toString().trim();
+          const sku = (row["SKU Marketplace"] || row["Seller SKU"] || "").toString().trim();
+          const store = (row["Channel - Nama Toko"] || row["Warehouse Name"] || storeName || "").toString().trim();
+          const variation = (row["VariaProduk"] || row["Variation"] || row["Varian Produk"] || "").toString().trim();
+          const dedupKey = `${store}|${orderId}|${sku}|${variation}`.toLowerCase();
+          if (dedupKey.replace(/[|]+/g, "").trim()) {
+            // Use meaningful dedup key if we have order info
+            if (!seen.has(dedupKey)) {
+              seen.add(dedupKey);
+              deduped.push(row);
+            }
+          } else if (!seen.has(hash)) {
+            // Fallback to full content hash
+            seen.add(hash);
+            deduped.push(row);
+          }
+        }
+        if (deduped.length < rows.length) {
+          const removed = rows.length - deduped.length;
+          if (notify) notify(`⚠️ ${removed} baris duplikat dalam ${file.name} dilewati`, "info", false);
+        }
+        rows = deduped;
         for (let start = 0; start < rows.length; start += CHUNK_SIZE) {
           const chunk = rows.slice(start, start + CHUNK_SIZE);
           const part = Math.floor(start / CHUNK_SIZE) + 1;
