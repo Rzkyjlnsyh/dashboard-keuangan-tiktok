@@ -1184,6 +1184,12 @@ def compute_summary(filters=None):
         alerts.append({"level": "warn", "title": "Margin tipis", "body": f"Margin bersih sementara {margin_text}%."})
     if totals["adSpend"] and primary_omzet and totals["adSpend"] / primary_omzet > 0.2:
         alerts.append({"level": "warn", "title": "Biaya iklan tinggi", "body": "Biaya iklan lebih dari 20% omset periode ini."})
+    if totals["bookOmzet"] and not totals["bookSettlement"] and totals["bookHeld"]:
+        alerts.append({
+            "level": "warn",
+            "title": "Pencairan belum valid",
+            "body": "Order periode ini sudah masuk, tetapi income statement belum melekat. Upload ulang file pencairan bulan ini sampai rows_seen banyak dan settlement cair terisi.",
+        })
     missing_for_alert = book_missing_cost if len(totals["bookOrders"]) else missing_cost
     if missing_for_alert:
         alerts.append({"level": "warn", "title": "Ada SKU tanpa HPP", "body": f"{len(missing_for_alert)} SKU belum punya HPP/packing."})
