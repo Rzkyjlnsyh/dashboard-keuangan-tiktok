@@ -68,6 +68,22 @@ def column_token(value):
     return "".join(ch for ch in clean_col(value).lower() if ch.isalnum())
 
 
+def row_value(row, *names):
+    lowered = {clean_col(key).lower(): value for key, value in row.items()}
+    tokened = {column_token(key): value for key, value in row.items()}
+    for name in names:
+        value = row.get(name)
+        if value is not None:
+            return value
+        value = lowered.get(clean_col(name).lower())
+        if value is not None:
+            return value
+        value = tokened.get(column_token(name))
+        if value is not None:
+            return value
+    return ""
+
+
 def is_cancelled_status(status):
     return column_token(status) in {"dibatalkan", "cancellations", "cancelled", "canceled", "cancel", "returned", "returnrefund"}
 
@@ -675,8 +691,8 @@ def import_income_excel(path, store_name=None):
         for row in existing_rows:
             by_order.setdefault(str(row["order_id"] or "").strip(), []).append(dict(row))
         for _, r in df.iterrows():
-            transaction_id = normalize_order_id(r.get("Order/adjustment ID", r.get("Order adjustment ID", "")))
-            related_order = normalize_order_id(r.get("Related order ID", ""))
+            transaction_id = normalize_order_id(row_value(r, "Order/adjustment ID", "Order adjustment ID", "ID Pesanan/Penyesuaian"))
+            related_order = normalize_order_id(row_value(r, "Related order ID", "Related order ID  ", "ID pesanan terkait", "ID Pesanan Terkait"))
             order_id = related_order if related_order and related_order != "/" else transaction_id
             if not order_id:
                 continue
@@ -684,15 +700,15 @@ def import_income_excel(path, store_name=None):
             if not existing_group:
                 skipped += 1
                 continue
-            income_type = str(r.get("Type", "")).strip()
-            settlement = float(rupiah(r.get("Total settlement amount", 0)))
-            total_revenue = float(rupiah(r.get("Total Revenue", 0)))
-            after_discount = float(rupiah(r.get("Subtotal after seller discounts", 0)))
-            before_discount = float(rupiah(r.get("Subtotal before discounts", 0)))
-            seller_discount = abs(float(rupiah(r.get("Seller discounts", 0))))
-            refund = abs(float(rupiah(r.get("Refund subtotal after seller discounts", 0))))
-            total_fees = abs(float(rupiah(r.get("Total Fees", 0))))
-            adjustment = float(rupiah(r.get("Ajustment amount", r.get("Adjustment amount", 0))))
+            income_type = str(row_value(r, "Type", "Jenis transaksi")).strip()
+            settlement = float(rupiah(row_value(r, "Total settlement amount", "Jumlah penyelesaian pembayaran")))
+            total_revenue = float(rupiah(row_value(r, "Total Revenue", "Total Pendapatan")))
+            after_discount = float(rupiah(row_value(r, "Subtotal after seller discounts", "Subtotal setelah diskon penjual")))
+            before_discount = float(rupiah(row_value(r, "Subtotal before discounts", "Subtotal sebelum diskon")))
+            seller_discount = abs(float(rupiah(row_value(r, "Seller discounts", "Diskon penjual"))))
+            refund = abs(float(rupiah(row_value(r, "Refund subtotal after seller discounts", "Subtotal pengembalian dana setelah diskon penjual"))))
+            total_fees = abs(float(rupiah(row_value(r, "Total Fees", "Total Biaya", "Jumlah biaya", "Total biaya"))))
+            adjustment = float(rupiah(row_value(r, "Ajustment amount", "Adjustment amount", "Jumlah penyesuaian")))
             income_settlement = max(0, settlement)
             order_amount = abs(after_discount or total_revenue or before_discount)
             income_fee = total_fees or (max(order_amount - income_settlement, 0) if income_settlement else 0) or (abs(settlement) if settlement < 0 else 0) or (abs(adjustment) if adjustment < 0 else 0)
@@ -706,8 +722,8 @@ def import_income_excel(path, store_name=None):
                 row.update(
                         {
                         "source": "income_statement",
-                        "updated_at": parse_dt(r.get("Order settled time")) or row.get("updated_at"),
-                        "status": (row.get("status") or "Dibatalkan") if is_cancelled_status(row.get("status")) or refund_only else ("Selesai" if column_token(income_type) == "order" and parse_dt(r.get("Order settled time")) else income_type or row.get("status") or "Income"),
+                        "updated_at": parse_dt(row_value(r, "Order settled time", "Waktu pembayaran pesanan", "Waktu penyelesaian pesanan", "Waktu penyelesaian pembayaran")) or row.get("updated_at"),
+                        "status": (row.get("status") or "Dibatalkan") if is_cancelled_status(row.get("status")) or refund_only else ("Selesai" if column_token(income_type) == "order" and parse_dt(row_value(r, "Order settled time", "Waktu pembayaran pesanan", "Waktu penyelesaian pesanan", "Waktu penyelesaian pembayaran")) else income_type or row.get("status") or "Income"),
                         "gross_product": current_gross or abs(before_discount or after_discount or total_revenue) * share,
                         "seller_discount": current_discount,
                         "platform_fee": income_fee * share if income_fee else float(row.get("platform_fee") or 0),
@@ -729,19 +745,32 @@ def import_income_excel(path, store_name=None):
 
 def detect_and_import(path, kind="auto", store_name=DEFAULT_STORE):
     kind = str(kind or "auto")
+    def has_col(cols, *names):
+        tokens = {column_token(col) for col in cols}
+        return any(column_token(name) in tokens for name in names)
+    def looks_income(cols):
+        return (
+            has_col(cols, "Order/adjustment ID", "Order adjustment ID", "ID Pesanan/Penyesuaian")
+            and has_col(cols, "Total settlement amount", "Jumlah penyelesaian pembayaran")
+            and has_col(cols, "Total Revenue", "Total Pendapatan", "Subtotal after seller discounts", "Subtotal setelah diskon penjual", "Total Fees", "Total Biaya")
+        )
     if kind == "sku":
         return import_sku(path, store_name)
     if kind in {"order", "orders"}:
         return import_order_excel(path, store_name)
     if kind in {"settlement", "pencairan"}:
+        if Path(path).suffix.lower() == ".xlsx":
+            sample = pd.read_excel(path, nrows=1)
+            if looks_income([clean_col(c) for c in sample.columns]):
+                return import_income_excel(path, store_name)
         return import_settlement_csv(path, store_name)
     if kind == "income":
         return import_income_excel(path, store_name)
     suffix = Path(path).suffix.lower()
     if suffix == ".xlsx":
         sample = pd.read_excel(path, nrows=1)
-        cols = set(clean_col(c) for c in sample.columns)
-        if {"Order/adjustment ID", "Total settlement amount"}.issubset(cols):
+        cols = [clean_col(c) for c in sample.columns]
+        if looks_income(cols):
             return import_income_excel(path, store_name)
         return import_order_excel(path, store_name)
     df = pd.read_csv(path, nrows=1)

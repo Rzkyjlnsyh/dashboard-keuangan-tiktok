@@ -79,7 +79,9 @@
     if (workbook.SheetNames.includes("Daftar Pesanan")) return "Daftar Pesanan";
     const incomeSheet = workbook.SheetNames.find(name => {
       const tokens = sheetHeaderTokens(workbook.Sheets[name]);
-      return tokens.includes("orderadjustmentid") && tokens.includes("totalsettlementamount");
+      const hasOrderId = tokens.includes("orderadjustmentid") || tokens.includes("idpesananpenyesuaian");
+      const hasSettlement = tokens.includes("totalsettlementamount") || tokens.includes("jumlahpenyelesaianpembayaran");
+      return hasOrderId && hasSettlement;
     });
     return incomeSheet || workbook.SheetNames[0];
   }
