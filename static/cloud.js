@@ -101,6 +101,17 @@
     }
     try {
       for (const file of files) {
+        if (/\.xlsx$/i.test(file.name)) {
+          if (submitButton) submitButton.textContent = `Upload ${file.name}`;
+          if (notify) notify(`Mengirim ${file.name} ke server agar Excel dibaca penuh...`, "info", false);
+          const formData = new FormData();
+          formData.append("storeName", storeName);
+          formData.append("kind", kind);
+          formData.append("files", file, file.name);
+          const result = await api("/api/upload", { method: "POST", body: formData });
+          results.push(result);
+          continue;
+        }
         let rows = await readRows(file);
         if (!rows.length) throw new Error(`File ${file.name} kosong atau header tidak terbaca.`);
         // Dedup by generating a rough hash of row content — remove exact duplicates
