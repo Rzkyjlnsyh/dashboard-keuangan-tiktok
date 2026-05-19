@@ -84,8 +84,17 @@ def row_value(row, *names):
     return ""
 
 
+def is_cancel_status(status):
+    return column_token(status) in {"dibatalkan", "cancellations", "cancelled", "canceled", "cancel"}
+
+
+def is_return_status(status):
+    token = column_token(status)
+    return "retur" in token or token in {"returned", "return", "returnrefund", "refundreturn"}
+
+
 def is_cancelled_status(status):
-    return column_token(status) in {"dibatalkan", "cancellations", "cancelled", "canceled", "cancel", "returned", "returnrefund"}
+    return is_cancel_status(status) or is_return_status(status)
 
 
 def is_unpaid_status(status):
@@ -992,9 +1001,11 @@ def compute_summary(filters=None):
         package_ids = {str(r["tracking_id"] or "").strip() for r in basis_rows if str(r["tracking_id"] or "").strip()}
         package_count = max(len(package_ids), 1)
         packing_total = max([float(r["packing_per_unit"] or 0) for r in basis_rows] or [0]) * package_count
-        cancelled = any(is_cancelled_status(r["status"]) for r in basis_rows)
+        returned = any(is_return_status(r["status"]) for r in basis_rows)
+        cancel_only = any(is_cancel_status(r["status"]) for r in basis_rows) and not returned
         unpaid = any(is_unpaid_status(r["status"]) for r in basis_rows)
-        excluded = cancelled or unpaid
+        excluded = cancel_only or returned or unpaid
+        cost_burned = returned or (not cancel_only and not unpaid)
         is_final = bool(settlement_total) and not excluded
         is_estimated = not settlement_total and not excluded
         settlement_gap = max(order_total - platform_fee_total - settlement_total, 0) if (not excluded and has_income and settlement_total) else 0
@@ -1037,7 +1048,7 @@ def compute_summary(filters=None):
             totals["platformDiscount"] += platform_discount_total
             totals["refund"] += refund_total
             totals["settlement"] += settlement_total
-            held_for_order = 0
+            held_for_order = max(order_total - platform_fee_total, 0) if (is_estimated and not has_income) else 0
             if held_for_order > 0 or (not has_income and not settlement_total):
                 totals["held"] += held_for_order
                 totals["heldOrders"].add(order_id)
@@ -1066,8 +1077,8 @@ def compute_summary(filters=None):
             omzet = 0 if excluded else order_total * share
             platform_fee = 0 if excluded else platform_fee_total * share
             refund = 0 if excluded else refund_total * share
-            hpp = qty * float(r["hpp_per_unit"] or 0)
-            packing = packing_total * share
+            hpp = qty * float(r["hpp_per_unit"] or 0) if cost_burned else 0
+            packing = packing_total * share if cost_burned else 0
             profit = omzet - platform_fee - refund - hpp - packing
             totals["qty"] += qty
             totals["hpp"] += hpp
