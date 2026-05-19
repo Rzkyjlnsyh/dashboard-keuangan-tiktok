@@ -5,9 +5,12 @@ const state = {
   accessRole: routeRole,
   summary: null,
   config: null,
-  filters: { preset: "all", month: "", store: "all" },
+  filters: { preset: "thisMonth", month: "", store: "all" },
+  pendingFilters: { preset: "thisMonth", month: "", store: "all" },
   skuSort: "profit",
   skuStatus: "all",
+  statusSort: "late",
+  statusFilter: "all",
   folderStore: "ventura",
 };
 
@@ -94,7 +97,7 @@ function withOwnerPin(options = {}) {
   const headers = new Headers(options.headers || {});
   const pin = localStorage.getItem("pareOwnerPin") || "";
   if (pin) headers.set("X-Owner-Pin", pin);
-  return { ...options, headers };
+  return { cache: "no-store", ...options, headers };
 }
 
 async function api(path, options, retryOwnerPin = true) {
@@ -122,7 +125,33 @@ function summaryUrl() {
   if (state.filters.preset === "month" && state.filters.month) params.set("month", state.filters.month);
   params.set("store", state.filters.store);
   params.set("role", state.accessRole);
+  params.set("_", Date.now().toString());
   return "/api/summary?" + params.toString();
+}
+
+function syncFilterControls() {
+  document.querySelectorAll("[data-preset]").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.preset === state.pendingFilters.preset);
+  });
+  if (el("monthFilter")) el("monthFilter").value = state.pendingFilters.month || "";
+  if (el("storeFilter")) el("storeFilter").value = state.pendingFilters.store || "all";
+}
+
+async function applyFilters() {
+  state.filters = { ...state.pendingFilters };
+  const button = el("applyFilters");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Memuat...";
+  }
+  try {
+    await refresh();
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.textContent = "Terapkan";
+    }
+  }
 }
 
 async function refresh() {
@@ -135,7 +164,7 @@ function populateStores(stores) {
   const options = [`<option value="all">Semua Toko</option>`].concat(
     stores.map(s => `<option value="${s}">${s}</option>`)
   ).join("");
-  const storeValue = el("storeFilter").value || state.filters.store;
+  const storeValue = state.pendingFilters.store || state.filters.store;
   el("storeFilter").innerHTML = options;
   el("storeFilter").value = [...el("storeFilter").options].some(opt => opt.value === storeValue) ? storeValue : state.filters.store;
   const uploadOptions = stores.map(s => `<option value="${s}">${s}</option>`).join("");
@@ -152,7 +181,7 @@ function populateStores(stores) {
 
 function populateMonths(months) {
   const monthSelect = el("monthFilter");
-  const previous = state.filters.month || monthSelect.value;
+  const previous = state.pendingFilters.month || state.filters.month || monthSelect.value;
   monthSelect.innerHTML = `<option value="">Semua bulan</option>` + (
     months.length
       ? months.map(month => `<option value="${month}">${monthLabel(month)}</option>`).join("")
@@ -160,13 +189,15 @@ function populateMonths(months) {
   );
   if (previous && months.includes(previous)) {
     monthSelect.value = previous;
-  } else if (state.filters.preset === "month" && months.length) {
+    state.pendingFilters.month = previous;
+  } else if (state.pendingFilters.preset === "month" && months.length) {
     monthSelect.value = months[0];
-    state.filters.month = months[0];
+    state.pendingFilters.month = months[0];
   } else {
     monthSelect.value = "";
-    state.filters.month = "";
+    state.pendingFilters.month = "";
   }
+  syncFilterControls();
 }
 
 function render(summary) {
@@ -210,7 +241,7 @@ function render(summary) {
   const bookProfitMetaEl = document.getElementById("bookProfitMeta");
   if (bookProfitMetaEl) bookProfitMetaEl.textContent = `${pct(viewMargin)} margin`;
   renderAlerts(summary.alerts);
-  renderStatus(summary.status);
+  renderStatus(summary.status, summary.operationStatus || [], summary.operationDetails || []);
   renderTable("topSku", summary.topSku);
   renderTable("weakSku", summary.weakSku);
   renderSkuDetail(summary);
@@ -268,7 +299,55 @@ function renderAssistant(assistant) {
   `;
 }
 
-function renderStatus(rows) {
+function renderStatus(rows, operationStatus = [], operationDetails = []) {
+  const operationCards = document.getElementById("operationCards");
+  if (operationCards) {
+    const priority = ["late", "processing", "waiting_ship", "shipped", "completed", "returned", "canceled"];
+    const byBucket = new Map(operationStatus.map(row => [row.bucket, row]));
+    operationCards.innerHTML = priority.map(bucket => {
+      const item = byBucket.get(bucket) || { label: bucket, packages: 0, orders: 0, late: 0 };
+      const label = bucket === "late" ? "Terlambat" : item.label;
+      const packages = bucket === "late"
+        ? operationStatus.reduce((sum, row) => sum + Number(row.late || 0), 0)
+        : Number(item.packages || 0);
+      const orders = bucket === "late"
+        ? operationDetails.filter(row => row.late).length
+        : Number(item.orders || 0);
+      return `
+        <article class="${bucket}">
+          <span>${escapeHtml(label)}</span>
+          <strong>${num(packages)}</strong>
+          <em>${num(orders)} order</em>
+        </article>
+      `;
+    }).join("");
+  }
+  const operationTable = document.getElementById("operationTable");
+  if (operationTable) {
+    let details = [...operationDetails];
+    if (state.statusFilter === "late") details = details.filter(row => row.late);
+    else if (state.statusFilter !== "all") details = details.filter(row => row.bucket === state.statusFilter);
+    const sorters = {
+      late: (a, b) => Number(b.late) - Number(a.late) || Number(b.ageDays || 0) - Number(a.ageDays || 0),
+      age: (a, b) => Number(b.ageDays || 0) - Number(a.ageDays || 0),
+      package: (a, b) => Number(b.packageCount || 0) - Number(a.packageCount || 0),
+      created: (a, b) => String(b.createdAt || "").localeCompare(String(a.createdAt || "")),
+    };
+    details.sort(sorters[state.statusSort] || sorters.late);
+    const body = details.slice(0, 80).map(row => `
+      <tr>
+        <td><strong>${escapeHtml(row.orderId)}</strong><br><span class="muted">${escapeHtml(row.store)}</span></td>
+        <td><span class="badge ${row.late ? "bad" : row.bucket === "completed" ? "good" : "watch"}">${escapeHtml(row.label)}</span></td>
+        <td>${num(row.packageCount)}</td>
+        <td>${row.late ? `<span class="late-text">${num(row.ageDays)} hari</span>` : `${num(row.ageDays)} hari`}</td>
+        <td>${escapeHtml(row.trackingId || "-")}<br><span class="muted">${escapeHtml(row.status || "-")}</span></td>
+      </tr>
+    `).join("");
+    operationTable.innerHTML = `
+      <thead><tr><th>Order</th><th>Posisi</th><th>Paket</th><th>Umur</th><th>Resi / Status</th></tr></thead>
+      <tbody>${body || `<tr><td colspan="5">Tidak ada paket untuk filter ini.</td></tr>`}</tbody>
+    `;
+  }
   const max = Math.max(...rows.map(r => r.count), 1);
   el("statusList").innerHTML = rows.slice(0, 8).map(r => `
     <div class="status-row">
@@ -498,29 +577,27 @@ document.querySelectorAll("nav button").forEach(btn => btn.addEventListener("cli
   }
   setView(btn.dataset.view);
 }));
-document.querySelectorAll("[data-preset]").forEach(btn => btn.addEventListener("click", async () => {
-  document.querySelectorAll("[data-preset]").forEach(x => x.classList.remove("active"));
-  btn.classList.add("active");
-  state.filters.preset = btn.dataset.preset;
+document.querySelectorAll("[data-preset]").forEach(btn => btn.addEventListener("click", () => {
+  state.pendingFilters.preset = btn.dataset.preset;
   if (btn.dataset.preset === "month") {
-    state.filters.month = el("monthFilter").value || (state.summary && state.summary.availableMonths && state.summary.availableMonths[0]) || "";
-    if (state.filters.month) el("monthFilter").value = state.filters.month;
+    state.pendingFilters.month = el("monthFilter").value || (state.summary && state.summary.availableMonths && state.summary.availableMonths[0]) || "";
+    if (state.pendingFilters.month) el("monthFilter").value = state.pendingFilters.month;
   } else {
-    state.filters.month = "";
+    state.pendingFilters.month = "";
     el("monthFilter").value = "";
   }
-  await refresh();
+  syncFilterControls();
 }));
-el("monthFilter").addEventListener("change", async (event) => {
-  state.filters.month = event.target.value;
-  state.filters.preset = state.filters.month ? "month" : "all";
-  document.querySelectorAll("[data-preset]").forEach(x => x.classList.toggle("active", x.dataset.preset === state.filters.preset));
-  await refresh();
+el("monthFilter").addEventListener("change", (event) => {
+  state.pendingFilters.month = event.target.value;
+  state.pendingFilters.preset = state.pendingFilters.month ? "month" : "thisMonth";
+  syncFilterControls();
 });
-el("storeFilter").addEventListener("change", async (event) => {
-  state.filters.store = event.target.value;
-  await refresh();
+el("storeFilter").addEventListener("change", (event) => {
+  state.pendingFilters.store = event.target.value;
+  syncFilterControls();
 });
+el("applyFilters").addEventListener("click", applyFilters);
 el("skuSort").addEventListener("change", (event) => {
   state.skuSort = event.target.value;
   if (state.summary) renderSkuDetail(state.summary);
@@ -528,6 +605,14 @@ el("skuSort").addEventListener("change", (event) => {
 el("skuStatus").addEventListener("change", (event) => {
   state.skuStatus = event.target.value;
   if (state.summary) renderSkuDetail(state.summary);
+});
+el("statusSort").addEventListener("change", (event) => {
+  state.statusSort = event.target.value;
+  if (state.summary) renderStatus(state.summary.status || [], state.summary.operationStatus || [], state.summary.operationDetails || []);
+});
+el("statusFilter").addEventListener("change", (event) => {
+  state.statusFilter = event.target.value;
+  if (state.summary) renderStatus(state.summary.status || [], state.summary.operationStatus || [], state.summary.operationDetails || []);
 });
 el("folderStore").addEventListener("change", (event) => {
   state.folderStore = event.target.value;
@@ -633,6 +718,7 @@ el("telegramTest").addEventListener("click", async () => {
   }
 });
 
+syncFilterControls();
 setView(state.view);
 loadConfig().then(refresh).catch(err => alert(err.message));
 setInterval(async () => {

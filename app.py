@@ -101,6 +101,48 @@ def is_unpaid_status(status):
     return column_token(status) in {"unpaid", "belumbayar", "pendingpayment"}
 
 
+OPERATION_LABELS = {
+    "processing": "Diproses",
+    "waiting_ship": "Menunggu kirim",
+    "shipped": "Dikirim",
+    "completed": "Selesai",
+    "returned": "Retur",
+    "canceled": "Cancel",
+    "unpaid": "Belum bayar",
+    "other": "Lainnya",
+}
+
+
+def operation_bucket(status, returned=False, cancel_only=False, unpaid=False, is_final=False, is_estimated=False):
+    if returned or is_return_status(status):
+        return "returned"
+    if cancel_only or is_cancel_status(status):
+        return "canceled"
+    if unpaid or is_unpaid_status(status):
+        return "unpaid"
+    token = column_token(status)
+    if token in {"selesai", "completed", "delivered", "terkirim"} or is_final:
+        return "completed"
+    if any(part in token for part in ["dikirim", "shipped", "intransit", "delivery", "delivering"]):
+        return "shipped"
+    if any(part in token for part in ["menunggukirim", "menunggupengiriman", "awaitingshipment", "toship", "readytoship", "siapdikirim", "pickup", "jemput"]):
+        return "waiting_ship"
+    if any(part in token for part in ["proses", "processing", "packing", "dikemas", "paid", "dibayar"]):
+        return "processing"
+    if is_estimated:
+        return "processing"
+    return "other"
+
+
+def day_age(created_day, today):
+    if not created_day or created_day == "Tanpa tanggal":
+        return 0
+    try:
+        return max(0, (today - datetime.strptime(created_day, "%Y-%m-%d").date()).days)
+    except ValueError:
+        return 0
+
+
 def has_income_settlement(row):
     return column_token(row["source"] or "") == "incomestatement" or "income" in column_token(row["last_seen_file"] or "") or "settlementstatement" in column_token(row["last_seen_file"] or "")
 
@@ -932,16 +974,16 @@ def date_range_from_filters(filters):
 
 def build_filters(query=None):
     query = query or {}
-    preset = query.get("preset", ["all"])[0] if isinstance(query.get("preset"), list) else query.get("preset", "all")
+    preset = query.get("preset", ["thisMonth"])[0] if isinstance(query.get("preset"), list) else query.get("preset", "thisMonth")
     month = query.get("month", [""])[0] if isinstance(query.get("month"), list) else query.get("month", "")
     store_name = query.get("store", ["all"])[0] if isinstance(query.get("store"), list) else query.get("store", "all")
     if preset not in {"all", "last7", "last14", "thisMonth", "month"}:
-        preset = "all"
+        preset = "thisMonth"
     return {"preset": preset, "month": month, "store": normalize_store(store_name) if store_name != "all" else "all"}
 
 
 def compute_summary(filters=None):
-    filters = filters or {"preset": "all", "month": "", "store": "all"}
+    filters = filters or {"preset": "thisMonth", "month": "", "store": "all"}
     rows = fetch_rows(filters.get("store", "all"))
     start_date, end_date = date_range_from_filters(filters)
     groups = {}
@@ -951,6 +993,8 @@ def compute_summary(filters=None):
     daily = {}
     stores = {}
     status = {}
+    operation_summary = {}
+    operation_details = []
     missing_cost = set()
     totals = {
         "orders": set(), "lines": 0, "qty": 0, "gross": 0, "sellerDiscount": 0, "omzet": 0, "platformFee": 0,
@@ -1023,6 +1067,36 @@ def compute_summary(filters=None):
         stores[store]["orders"].add(order_id)
         for r in basis_rows:
             status[r["status"] or "Tanpa status"] = status.get(r["status"] or "Tanpa status", 0) + 1
+        bucket = operation_bucket(first["status"], returned=returned, cancel_only=cancel_only, unpaid=unpaid, is_final=is_final, is_estimated=is_estimated)
+        age_days = day_age(created_day, today)
+        late = bucket in {"processing", "waiting_ship"} and age_days > 0
+        op = operation_summary.setdefault(bucket, {
+            "bucket": bucket,
+            "label": OPERATION_LABELS.get(bucket, "Lainnya"),
+            "orders": set(),
+            "packages": 0,
+            "late": 0,
+        })
+        op["orders"].add(order_id)
+        op["packages"] += package_count
+        if late:
+            op["late"] += package_count
+        tracking_ids = sorted({str(r["tracking_id"] or "").strip() for r in basis_rows if str(r["tracking_id"] or "").strip()})
+        operation_details.append({
+            "orderId": str(first["order_id"] or order_id),
+            "store": store,
+            "status": first["status"] or "Tanpa status",
+            "bucket": bucket,
+            "label": OPERATION_LABELS.get(bucket, "Lainnya"),
+            "packageCount": package_count,
+            "itemQty": sum(float(r["quantity"] or 0) for r in basis_rows),
+            "skuCount": len({r["sku"] for r in basis_rows if r["sku"]}),
+            "createdAt": created_day,
+            "updatedAt": (first["updated_at"] or "")[:10],
+            "trackingId": ", ".join(tracking_ids),
+            "late": late,
+            "ageDays": age_days,
+        })
         if excluded:
             cancelled_value = refund_total or order_total
             totals["refund"] += cancelled_value
@@ -1229,6 +1303,17 @@ def compute_summary(filters=None):
     missing_for_alert = book_missing_cost if len(totals["bookOrders"]) else missing_cost
     if missing_for_alert:
         alerts.append({"level": "warn", "title": "Ada SKU tanpa HPP", "body": f"{len(missing_for_alert)} SKU belum punya HPP/packing."})
+    operation_status = []
+    for item in operation_summary.values():
+        copied = dict(item)
+        copied["orders"] = len(copied["orders"])
+        operation_status.append(copied)
+    operation_status.sort(key=lambda x: x["packages"], reverse=True)
+    operation_details = sorted(
+        operation_details,
+        key=lambda x: (int(bool(x["late"])), x["ageDays"], x["createdAt"]),
+        reverse=True,
+    )[:300]
     assistant = build_assistant(totals, primary_margin, top_sku, weak_sku, missing_for_alert, daily_list)
     return {
         "generatedAt": now_iso(),
@@ -1253,6 +1338,8 @@ def compute_summary(filters=None):
         "skuSummary": sku_summary,
         "stores": sorted(store_list, key=lambda x: x["omzet"], reverse=True),
         "status": [{"status": k, "count": v} for k, v in sorted(status.items(), key=lambda x: x[1], reverse=True)],
+        "operationStatus": operation_status,
+        "operationDetails": operation_details,
         "missingCost": sorted(missing_cost)[:30],
         "alerts": alerts,
         "assistant": assistant,

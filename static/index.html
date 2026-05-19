@@ -64,15 +64,16 @@
         <div>
           <span>Periode</span>
           <div class="segments">
-            <button data-preset="all" class="active">All</button>
+            <button data-preset="all">All</button>
             <button data-preset="last7">7 Hari</button>
             <button data-preset="last14">14 Hari</button>
-            <button data-preset="thisMonth">Bulan Ini</button>
+            <button data-preset="thisMonth" class="active">Bulan Ini</button>
             <button data-preset="month">Pilih Bulan</button>
           </div>
         </div>
         <label>Bulan <select id="monthFilter"></select></label>
         <label>Toko <select id="storeFilter"></select></label>
+        <button id="applyFilters" class="apply-filter">Terapkan</button>
       </section>
 
       <section id="alerts" class="alerts" data-show="owner,team,tv,ops"></section>
@@ -100,6 +101,27 @@
         </article>
         <article class="panel">
           <div class="panel-head"><div><span>Status</span><strong>Posisi Order</strong></div></div>
+          <div id="operationCards" class="operation-cards"></div>
+          <div class="table-controls status-controls">
+            <select id="statusFilter">
+              <option value="all">Semua posisi</option>
+              <option value="late">Terlambat</option>
+              <option value="processing">Diproses</option>
+              <option value="waiting_ship">Menunggu kirim</option>
+              <option value="shipped">Dikirim</option>
+              <option value="completed">Selesai</option>
+              <option value="returned">Retur</option>
+              <option value="canceled">Cancel</option>
+            </select>
+            <select id="statusSort">
+              <option value="late">Sort terlambat</option>
+              <option value="age">Sort umur order</option>
+              <option value="package">Sort paket</option>
+              <option value="created">Sort terbaru</option>
+            </select>
+          </div>
+          <div class="table-wrap operation-table"><table id="operationTable"></table></div>
+          <div class="compact-head panel-head"><div><span>Mentah</span><strong>Status dari file</strong></div></div>
           <div id="statusList" class="status-list"></div>
         </article>
       </section>
