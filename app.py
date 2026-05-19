@@ -959,6 +959,9 @@ def compute_summary(filters=None):
     }
     book_missing_cost = set()
     today = date.today().isoformat()
+    ad_rows = filtered_ad_spend(filters, start_date, end_date)
+    explicit_ad_spend = sum(float(expense["amount"] or 0) for expense in ad_rows)
+    treat_settlement_gap_as_ad = explicit_ad_spend <= 0
     for order_id, order_rows in groups.items():
         basis_rows = [r for r in order_rows if is_book_source(r)] or order_rows
         basis_rows = [r for r in basis_rows if float(r["quantity"] or 0) <= 0 or float(r["hpp_per_unit"] or 0) > 0]
@@ -994,6 +997,10 @@ def compute_summary(filters=None):
         excluded = cancelled or unpaid
         is_final = bool(settlement_total) and not excluded
         is_estimated = not settlement_total and not excluded
+        settlement_gap = max(order_total - platform_fee_total - settlement_total, 0) if (not excluded and has_income and settlement_total) else 0
+        if settlement_gap > 0 and not treat_settlement_gap_as_ad:
+            final_platform_fee_total += settlement_gap
+            platform_fee_total += settlement_gap
         totals["orders"].add(order_id)
         totals["lines"] += len(basis_rows)
         if created_day == today:
@@ -1030,12 +1037,11 @@ def compute_summary(filters=None):
             totals["platformDiscount"] += platform_discount_total
             totals["refund"] += refund_total
             totals["settlement"] += settlement_total
-            settlement_gap = max(order_total - platform_fee_total - settlement_total, 0) if has_income and settlement_total else 0
             held_for_order = 0
             if held_for_order > 0 or (not has_income and not settlement_total):
                 totals["held"] += held_for_order
                 totals["heldOrders"].add(order_id)
-            if settlement_gap > 0:
+            if settlement_gap > 0 and treat_settlement_gap_as_ad:
                 totals["adSpend"] += settlement_gap
                 totals["settlementAdSpend"] += settlement_gap
                 daily[created_day]["profit"] -= settlement_gap
@@ -1106,7 +1112,6 @@ def compute_summary(filters=None):
             sku[key]["packing"] += packing
             sku[key]["platformFee"] += platform_fee
             sku[key]["refund"] += refund
-    ad_rows = filtered_ad_spend(filters, start_date, end_date)
     ad_by_store = {}
     for expense in ad_rows:
         amount = float(expense["amount"] or 0)
