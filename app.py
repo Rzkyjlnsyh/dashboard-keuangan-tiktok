@@ -949,7 +949,7 @@ def compute_summary(filters=None):
         "platformDiscount": 0, "hpp": 0, "packing": 0, "refund": 0, "settlement": 0, "held": 0,
         "cancelledAmount": 0, "profit": 0, "profitBeforeAds": 0, "adSpend": 0, "todayOrders": 0,
         "finalProfit": 0, "estimatedProfit": 0, "finalProfitBeforeAds": 0, "estimatedProfitBeforeAds": 0,
-        "finalAdSpend": 0, "estimatedAdSpend": 0, "finalOmzet": 0, "estimatedOmzet": 0,
+        "finalAdSpend": 0, "estimatedAdSpend": 0, "settlementAdSpend": 0, "finalOmzet": 0, "estimatedOmzet": 0,
         "finalOrders": set(), "estimatedOrders": set(), "heldOrders": set(), "cancelledOrders": set(),
         "bookGross": 0, "bookSellerDiscount": 0, "bookOmzet": 0, "bookPlatformFee": 0,
         "bookPlatformFeeFinal": 0, "bookPlatformFeeEstimated": 0,
@@ -1030,10 +1030,16 @@ def compute_summary(filters=None):
             totals["platformDiscount"] += platform_discount_total
             totals["refund"] += refund_total
             totals["settlement"] += settlement_total
-            held_for_order = max(order_total - platform_fee_total - settlement_total, 0) if has_income else 0
+            settlement_gap = max(order_total - platform_fee_total - settlement_total, 0) if has_income and settlement_total else 0
+            held_for_order = 0
             if held_for_order > 0 or (not has_income and not settlement_total):
                 totals["held"] += held_for_order
                 totals["heldOrders"].add(order_id)
+            if settlement_gap > 0:
+                totals["adSpend"] += settlement_gap
+                totals["settlementAdSpend"] += settlement_gap
+                daily[created_day]["profit"] -= settlement_gap
+                stores[store]["profit"] -= settlement_gap
             daily[created_day]["omzet"] += order_total
             stores[store]["omzet"] += order_total
         book_order = any(is_book_source(r) for r in basis_rows)
@@ -1116,7 +1122,8 @@ def compute_summary(filters=None):
     totals["bookAdSpend"] = totals["adSpend"]
     totals["bookProfit"] = totals["bookProfitBeforeAds"] - totals["bookAdSpend"]
     if totals["omzet"]:
-        totals["finalAdSpend"] = totals["adSpend"] * (totals["finalOmzet"] / totals["omzet"])
+        dated_ad_spend = max(totals["adSpend"] - totals["settlementAdSpend"], 0)
+        totals["finalAdSpend"] = totals["settlementAdSpend"] + dated_ad_spend * (totals["finalOmzet"] / totals["omzet"])
         totals["estimatedAdSpend"] = totals["adSpend"] - totals["finalAdSpend"]
     totals["finalProfit"] = totals["finalProfitBeforeAds"] - totals["finalAdSpend"]
     totals["estimatedProfit"] = totals["estimatedProfitBeforeAds"] - totals["estimatedAdSpend"]
