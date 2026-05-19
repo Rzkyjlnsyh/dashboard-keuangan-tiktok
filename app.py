@@ -42,7 +42,7 @@ AUDIT_FIELDS = {
 NUMERIC_AUDIT_FIELDS = {"order_amount", "settlement_received", "platform_fee", "refund_amount", "quantity"}
 SECRET_TOTAL_KEYS = {
     "platformFee", "platformFeeFinal", "platformFeeEstimated", "platformDiscount", "hpp", "packing", "refund", "settlement", "profit",
-    "profitBeforeAds", "adSpend", "margin", "finalProfit", "estimatedProfit", "finalProfitBeforeAds",
+    "profitBeforeAds", "adSpend", "adSpendTopup", "adSpendSettlement", "settlementAdSpend", "margin", "finalProfit", "estimatedProfit", "finalProfitBeforeAds",
     "estimatedProfitBeforeAds", "finalAdSpend", "estimatedAdSpend", "finalMargin", "estimatedMargin",
     "sellerDiscount", "cancelledAmount",
     "bookPlatformFee", "bookPlatformFeeFinal", "bookPlatformFeeEstimated", "bookHpp", "bookPacking", "bookSettlement", "bookProfit", "bookProfitBeforeAds",
@@ -764,7 +764,16 @@ def import_income_excel(path, store_name=None):
             seller_discount = abs(float(rupiah(row_value(r, "Seller discounts", "Diskon penjual"))))
             refund = abs(float(rupiah(row_value(r, "Refund subtotal after seller discounts", "Subtotal pengembalian dana setelah diskon penjual"))))
             total_fees = abs(float(rupiah(row_value(r, "Total Fees", "Total Biaya", "Jumlah biaya", "Total biaya"))))
+            ad_fee = abs(float(rupiah(row_value(r, "GMV Max ad fee", "GMV Max Ad Fee", "Biaya iklan GMV Max", "Biaya Iklan GMV Max", "TikTok Ads fee", "Biaya TikTok Ads"))))
             adjustment = float(rupiah(row_value(r, "Ajustment amount", "Adjustment amount", "Jumlah penyesuaian")))
+            if ad_fee > 0:
+                spend_date = (parse_dt(row_value(r, "Order settled time", "Waktu pembayaran pesanan", "Waktu penyelesaian pesanan", "Waktu penyelesaian pembayaran")) or parse_dt(row_value(r, "Order created time", "Waktu pemesanan")) or date.today().isoformat())[:10]
+                campaign = f"{Path(path).name}:{transaction_id or order_id}:ads"
+                conn.execute("DELETE FROM ad_spend WHERE lower(store_name)=lower(?) AND spend_date=? AND channel=? AND campaign=?", (selected_store, spend_date, "TikTok Ads Settlement", campaign))
+                conn.execute(
+                    "INSERT INTO ad_spend (store_name, spend_date, amount, channel, campaign, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (selected_store, spend_date, ad_fee, "TikTok Ads Settlement", campaign, f"Terdeteksi dari income statement: {income_type or 'ads'}", now_iso(), now_iso()),
+                )
             income_settlement = max(0, settlement)
             order_amount = abs(after_discount or total_revenue or before_discount)
             income_fee = total_fees or (max(order_amount - income_settlement, 0) if income_settlement else 0) or (abs(settlement) if settlement < 0 else 0) or (abs(adjustment) if adjustment < 0 else 0)
@@ -964,6 +973,8 @@ def date_range_from_filters(filters):
         return today - timedelta(days=13), today
     if preset == "thisMonth":
         return today.replace(day=1), today
+    if preset == "custom" and filters.get("startDate") and filters.get("endDate"):
+        return datetime.strptime(filters["startDate"], "%Y-%m-%d").date(), datetime.strptime(filters["endDate"], "%Y-%m-%d").date()
     if preset == "month" and filters.get("month"):
         year, month = [int(part) for part in filters["month"].split("-")[:2]]
         start = date(year, month, 1)
@@ -977,9 +988,11 @@ def build_filters(query=None):
     preset = query.get("preset", ["thisMonth"])[0] if isinstance(query.get("preset"), list) else query.get("preset", "thisMonth")
     month = query.get("month", [""])[0] if isinstance(query.get("month"), list) else query.get("month", "")
     store_name = query.get("store", ["all"])[0] if isinstance(query.get("store"), list) else query.get("store", "all")
-    if preset not in {"all", "last7", "last14", "thisMonth", "month"}:
+    if preset not in {"all", "last7", "last14", "thisMonth", "month", "custom"}:
         preset = "thisMonth"
-    return {"preset": preset, "month": month, "store": normalize_store(store_name) if store_name != "all" else "all"}
+    start_date = query.get("startDate", [""])[0] if isinstance(query.get("startDate"), list) else query.get("startDate", "")
+    end_date = query.get("endDate", [""])[0] if isinstance(query.get("endDate"), list) else query.get("endDate", "")
+    return {"preset": preset, "month": month, "store": normalize_store(store_name) if store_name != "all" else "all", "startDate": start_date, "endDate": end_date}
 
 
 def compute_summary(filters=None):
@@ -1000,7 +1013,7 @@ def compute_summary(filters=None):
         "orders": set(), "lines": 0, "qty": 0, "gross": 0, "sellerDiscount": 0, "omzet": 0, "platformFee": 0,
         "platformFeeFinal": 0, "platformFeeEstimated": 0,
         "platformDiscount": 0, "hpp": 0, "packing": 0, "refund": 0, "settlement": 0, "held": 0,
-        "cancelledAmount": 0, "profit": 0, "profitBeforeAds": 0, "adSpend": 0, "todayOrders": 0,
+        "cancelledAmount": 0, "profit": 0, "profitBeforeAds": 0, "adSpend": 0, "adSpendTopup": 0, "adSpendSettlement": 0, "todayOrders": 0,
         "finalProfit": 0, "estimatedProfit": 0, "finalProfitBeforeAds": 0, "estimatedProfitBeforeAds": 0,
         "finalAdSpend": 0, "estimatedAdSpend": 0, "settlementAdSpend": 0, "finalOmzet": 0, "estimatedOmzet": 0,
         "finalOrders": set(), "estimatedOrders": set(), "heldOrders": set(), "cancelledOrders": set(),
@@ -1013,8 +1026,6 @@ def compute_summary(filters=None):
     book_missing_cost = set()
     today = date.today().isoformat()
     ad_rows = filtered_ad_spend(filters, start_date, end_date)
-    explicit_ad_spend = sum(float(expense["amount"] or 0) for expense in ad_rows)
-    treat_settlement_gap_as_ad = explicit_ad_spend <= 0
     for order_id, order_rows in groups.items():
         basis_rows = [r for r in order_rows if is_book_source(r)] or order_rows
         basis_rows = [r for r in basis_rows if float(r["quantity"] or 0) <= 0 or float(r["hpp_per_unit"] or 0) > 0]
@@ -1038,7 +1049,8 @@ def compute_summary(filters=None):
         refund_total = sum(abs(float(r["refund_amount"] or 0)) for r in basis_rows)
         raw_platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in basis_rows)
         has_income = any(has_income_settlement(r) for r in basis_rows)
-        final_platform_fee_total = raw_platform_fee_total if has_income else 0
+        implied_final_fee_total = max(order_total - settlement_total, 0) if has_income and settlement_total else 0
+        final_platform_fee_total = max(raw_platform_fee_total, implied_final_fee_total) if has_income else 0
         estimated_platform_fee_total = 0 if has_income else raw_platform_fee_total
         platform_fee_total = final_platform_fee_total if has_income else estimated_platform_fee_total
         platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in basis_rows)
@@ -1052,10 +1064,6 @@ def compute_summary(filters=None):
         cost_burned = returned or (not cancel_only and not unpaid)
         is_final = bool(settlement_total) and not excluded
         is_estimated = not settlement_total and not excluded
-        settlement_gap = max(order_total - platform_fee_total - settlement_total, 0) if (not excluded and has_income and settlement_total) else 0
-        if settlement_gap > 0 and not treat_settlement_gap_as_ad:
-            final_platform_fee_total += settlement_gap
-            platform_fee_total += settlement_gap
         totals["orders"].add(order_id)
         totals["lines"] += len(basis_rows)
         if created_day == today:
@@ -1126,11 +1134,6 @@ def compute_summary(filters=None):
             if held_for_order > 0 or (not has_income and not settlement_total):
                 totals["held"] += held_for_order
                 totals["heldOrders"].add(order_id)
-            if settlement_gap > 0 and treat_settlement_gap_as_ad:
-                totals["adSpend"] += settlement_gap
-                totals["settlementAdSpend"] += settlement_gap
-                daily[created_day]["profit"] -= settlement_gap
-                stores[store]["profit"] -= settlement_gap
             daily[created_day]["omzet"] += order_total
             stores[store]["omzet"] += order_total
         book_order = any(is_book_source(r) for r in basis_rows)
@@ -1200,24 +1203,30 @@ def compute_summary(filters=None):
     ad_by_store = {}
     for expense in ad_rows:
         amount = float(expense["amount"] or 0)
+        settlement_ad = "settlement" in column_token(expense.get("channel")) or "incomestatement" in column_token(expense.get("note"))
         totals["adSpend"] += amount
+        if settlement_ad:
+            totals["adSpendSettlement"] += amount
+            totals["settlementAdSpend"] += amount
+        else:
+            totals["adSpendTopup"] += amount
         spend_day = expense["spend_date"] or "Tanpa tanggal"
         daily.setdefault(spend_day, {"date": spend_day, "orders": set(), "omzet": 0, "profit": 0})
-        daily[spend_day]["profit"] -= amount
         store = expense["store_name"] or DEFAULT_STORE
         stores.setdefault(store, {"store": store, "orders": set(), "omzet": 0, "profit": 0})
-        stores[store]["profit"] -= amount
+        if not settlement_ad:
+            daily[spend_day]["profit"] -= amount
+            stores[store]["profit"] -= amount
         ad_by_store[store] = ad_by_store.get(store, 0) + amount
     totals["profitBeforeAds"] = totals["profit"]
-    totals["bookAdSpend"] = totals["adSpend"]
+    totals["bookAdSpend"] = totals["adSpendTopup"]
     totals["bookProfit"] = totals["bookProfitBeforeAds"] - totals["bookAdSpend"]
     if totals["omzet"]:
-        dated_ad_spend = max(totals["adSpend"] - totals["settlementAdSpend"], 0)
-        totals["finalAdSpend"] = totals["settlementAdSpend"] + dated_ad_spend * (totals["finalOmzet"] / totals["omzet"])
-        totals["estimatedAdSpend"] = totals["adSpend"] - totals["finalAdSpend"]
+        totals["finalAdSpend"] = totals["adSpendTopup"] * (totals["finalOmzet"] / totals["omzet"])
+        totals["estimatedAdSpend"] = totals["adSpendTopup"] - totals["finalAdSpend"]
     totals["finalProfit"] = totals["finalProfitBeforeAds"] - totals["finalAdSpend"]
     totals["estimatedProfit"] = totals["estimatedProfitBeforeAds"] - totals["estimatedAdSpend"]
-    totals["profit"] -= totals["adSpend"]
+    totals["profit"] -= totals["adSpendTopup"]
     order_count = len(totals["orders"])
     final_order_count = len(totals["finalOrders"])
     estimated_order_count = len(totals["estimatedOrders"])
@@ -1246,7 +1255,7 @@ def compute_summary(filters=None):
         item["orders"] = len(item["orders"])
         item["stores"] = sorted(item["stores"])
         item["profitBeforeAds"] = item["profit"]
-        item["adSpend"] = (totals["adSpend"] * item["omzet"] / totals["omzet"]) if totals["omzet"] else 0
+        item["adSpend"] = (totals["adSpendTopup"] * item["omzet"] / totals["omzet"]) if totals["omzet"] else 0
         item["profit"] = item["profitBeforeAds"] - item["adSpend"]
         item["costTotal"] = item["hpp"] + item["packing"] + item["platformFee"] + item["refund"] + item["adSpend"]
         item["margin"] = (item["profit"] / item["omzet"] * 100) if item["omzet"] else 0
@@ -1411,7 +1420,11 @@ def redact_summary(summary, role="team"):
             "hpp": 0,
             "packing": 0,
             "potonganPlatform": 0,
+            "potonganPlatformFinal": 0,
+            "potonganPlatformEstimasi": 0,
             "biayaIklan": 0,
+            "biayaIklanSettlement": 0,
+            "biayaIklanTopup": 0,
             "totalBiaya": 0,
             "danaTertahan": 0,
             "refund": 0,
@@ -1436,6 +1449,8 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
     profit = float(totals["profit"] or 0)
     hpp_total = float(totals["hpp"] or 0) + float(totals["packing"] or 0)
     ad_spend = float(totals["adSpend"] or 0)
+    ad_spend_topup = float(totals.get("adSpendTopup", 0) or 0)
+    ad_spend_settlement = float(totals.get("adSpendSettlement", totals.get("settlementAdSpend", 0)) or 0)
     final_profit = float(totals.get("finalProfit", 0) or 0)
     estimated_profit = float(totals.get("estimatedProfit", 0) or 0)
     final_omzet = float(totals.get("finalOmzet", 0) or 0)
@@ -1518,7 +1533,9 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
             "potonganPlatformFinal": float(totals.get("bookPlatformFeeFinal" if has_book else "platformFeeFinal", 0) or 0),
             "potonganPlatformEstimasi": float(totals.get("bookPlatformFeeEstimated" if has_book else "platformFeeEstimated", 0) or 0),
             "biayaIklan": ad_spend,
-            "totalBiaya": ((float(totals.get("bookHpp", 0) or 0) + float(totals.get("bookPacking", 0) or 0)) if has_book else hpp_total) + ad_spend,
+            "biayaIklanSettlement": ad_spend_settlement,
+            "biayaIklanTopup": ad_spend_topup,
+            "totalBiaya": ((float(totals.get("bookHpp", 0) or 0) + float(totals.get("bookPacking", 0) or 0)) if has_book else hpp_total) + ad_spend_topup,
             "danaTertahan": float(totals.get("bookHeld" if has_book else "held", 0) or 0),
             "refund": float(totals.get("bookCancelledAmount", 0) or 0) if has_book else refund,
             "returCancel": float(totals.get("bookCancelledAmount" if has_book else "cancelledAmount", 0) or 0),
@@ -1534,30 +1551,58 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
     }
 
 
-def telegram_message(summary):
+def telegram_report_summaries():
+    yesterday = date.today() - timedelta(days=1)
+    start_30 = yesterday - timedelta(days=29)
+    yesterday_summary = compute_summary({"preset": "custom", "startDate": yesterday.isoformat(), "endDate": yesterday.isoformat(), "store": "all"})
+    last_30_summary = compute_summary({"preset": "custom", "startDate": start_30.isoformat(), "endDate": yesterday.isoformat(), "store": "all"})
+    return yesterday_summary, last_30_summary
+
+
+def telegram_message(summary, last_30_summary=None):
     t = summary["totals"]
-    top = summary["topSku"][0] if summary["topSku"] else {"sku": "-", "profit": 0}
-    weak = summary["weakSku"][0] if summary["weakSku"] else {"sku": "-", "profit": 0}
+    m = (last_30_summary or summary)["totals"]
+    top = (last_30_summary or summary)["topSku"][0] if (last_30_summary or summary)["topSku"] else {"sku": "-", "profit": 0}
+    weak = (last_30_summary or summary)["weakSku"][0] if (last_30_summary or summary)["weakSku"] else {"sku": "-", "profit": 0}
     alerts = "\n".join([f"- {a['title']}: {a['body']}" for a in summary["alerts"]]) or "- Tidak ada alert besar"
     has_book = float(t.get("bookOrders", 0) or 0) > 0 or float(t.get("bookOmzet", 0) or 0) > 0
+    has_book_30 = float(m.get("bookOrders", 0) or 0) > 0 or float(m.get("bookOmzet", 0) or 0) > 0
     accounting_omzet = t.get("bookOmzet") if has_book else t.get("omzet")
     accounting_profit = t.get("bookProfit") if has_book else t.get("finalProfit")
     accounting_margin = t.get("bookMargin") if has_book else t.get("finalMargin")
+    month_omzet = m.get("bookOmzet") if has_book_30 else m.get("omzet")
+    month_profit = m.get("bookProfit") if has_book_30 else m.get("finalProfit")
+    month_margin = m.get("bookMargin") if has_book_30 else m.get("finalMargin")
+    yesterday_label = summary.get("filters", {}).get("startDate", "kemarin")
+    last_30_filters = (last_30_summary or summary).get("filters", {})
+    last_30_label = f"{last_30_filters.get('startDate', '')} s/d {last_30_filters.get('endDate', '')}".strip()
     return (
         "Ringkasan Keuangan TikTok\n"
-        f"Waktu: {summary['generatedAt']}\n\n"
+        f"Waktu: {summary['generatedAt']}\n"
+        f"Update kemarin: {yesterday_label}\n\n"
+        "Kemarin\n"
         f"Order unik: {t['orders']}\n"
         f"Omzet net: Rp{rupiah(accounting_omzet):,}\n"
         f"Dana tertahan: Rp{rupiah(t.get('bookHeld') if has_book else t.get('held')):,}\n"
         f"Settlement cair: Rp{rupiah(t.get('bookSettlement') if has_book else t.get('settlement')):,}\n"
         f"Potongan platform: Rp{rupiah(t.get('bookPlatformFee') if has_book else t.get('platformFee')):,}\n"
+        f"Iklan settlement: Rp{rupiah(t.get('adSpendSettlement') or t.get('settlementAdSpend')):,}\n"
+        f"Iklan top up: Rp{rupiah(t.get('adSpendTopup')):,}\n"
         f"HPP + packing: Rp{rupiah((t.get('bookHpp', 0) + t.get('bookPacking', 0)) if has_book else (t['hpp'] + t['packing'])):,}\n"
-        f"Biaya iklan: Rp{rupiah(t.get('adSpend', 0)):,}\n"
         f"Profit bersih: Rp{rupiah(accounting_profit):,} ({accounting_margin:.1f}%)\n"
         f"Profit estimasi operasional: Rp{rupiah(t['profit']):,} ({t['margin']:.1f}%)\n\n"
-        f"SKU profit tertinggi: {top['sku']} Rp{rupiah(top['profit']):,}\n"
-        f"SKU perlu dicek: {weak['sku']} Rp{rupiah(weak['profit']):,}\n\n"
-        f"Alert:\n{alerts}"
+        f"30 hari terakhir ({last_30_label})\n"
+        f"Order unik: {m['orders']}\n"
+        f"Omzet net: Rp{rupiah(month_omzet):,}\n"
+        f"Dana tertahan: Rp{rupiah(m.get('bookHeld') if has_book_30 else m.get('held')):,}\n"
+        f"Settlement cair: Rp{rupiah(m.get('bookSettlement') if has_book_30 else m.get('settlement')):,}\n"
+        f"Potongan platform: Rp{rupiah(m.get('bookPlatformFee') if has_book_30 else m.get('platformFee')):,}\n"
+        f"Iklan settlement: Rp{rupiah(m.get('adSpendSettlement') or m.get('settlementAdSpend')):,}\n"
+        f"Iklan top up: Rp{rupiah(m.get('adSpendTopup')):,}\n"
+        f"Profit bersih: Rp{rupiah(month_profit):,} ({month_margin:.1f}%)\n\n"
+        f"SKU profit tertinggi 30 hari: {top['sku']} Rp{rupiah(top['profit']):,}\n"
+        f"SKU perlu dicek 30 hari: {weak['sku']} Rp{rupiah(weak['profit']):,}\n\n"
+        f"Alert kemarin:\n{alerts}"
     ).replace(",", ".")
 
 
@@ -1661,8 +1706,8 @@ def scheduler_loop():
             today = date.today().isoformat()
             run_folder_monitor(force=False)
             if current == cfg.get("morningTime", "07:30") and cfg.get("lastMorningSent") != today:
-                summary = compute_summary()
-                send_telegram(telegram_message(summary))
+                yesterday_summary, last_30_summary = telegram_report_summaries()
+                send_telegram(telegram_message(yesterday_summary, last_30_summary))
                 cfg["lastMorningSent"] = today
                 write_config(cfg)
             time.sleep(30)
@@ -1800,8 +1845,8 @@ class AppHandler(BaseHTTPRequestHandler):
             if route == "/api/telegram-test":
                 if not self.require_owner():
                     return
-                summary = compute_summary()
-                result = send_telegram(telegram_message(summary))
+                yesterday_summary, last_30_summary = telegram_report_summaries()
+                result = send_telegram(telegram_message(yesterday_summary, last_30_summary))
                 return self.send_json({"ok": True, "result": result})
             if route == "/api/upload":
                 if not self.require_owner():

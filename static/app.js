@@ -235,6 +235,10 @@ function render(summary) {
   const platformFeeMetaEl = document.getElementById("platformFeeMeta");
   if (platformFeeMetaEl) platformFeeMetaEl.textContent = viewPlatform ? "Dari income statement" : "Belum ada income match";
   el("adSpend").textContent = fmtCompact(t.adSpend);
+  const adSpendSettlementEl = document.getElementById("adSpendSettlement");
+  if (adSpendSettlementEl) adSpendSettlementEl.textContent = fmtCompact(Number(t.adSpendSettlement || t.settlementAdSpend || 0));
+  const adSpendTopupEl = document.getElementById("adSpendTopup");
+  if (adSpendTopupEl) adSpendTopupEl.textContent = fmtCompact(Number(t.adSpendTopup || 0));
   el("hpp").textContent = fmtCompact(viewHppPacking);
   const bookProfitEl = document.getElementById("bookProfit");
   if (bookProfitEl) bookProfitEl.textContent = fmtCompact(viewProfit);
@@ -291,7 +295,9 @@ function renderAssistant(assistant) {
     <div class="secret"><span>Potongan Platform</span><strong>${fmt(a.potonganPlatform)}</strong></div>
     <div class="secret"><span>HPP</span><strong>${fmt(a.hpp || 0)}</strong></div>
     <div class="secret"><span>Packing</span><strong>${fmt(a.packing || 0)}</strong></div>
-    <div class="secret"><span>Biaya Iklan</span><strong>${fmt(a.biayaIklan)}</strong></div>
+    <div class="secret"><span>Biaya Iklan Total</span><strong>${fmt(a.biayaIklan)}</strong></div>
+    <div class="secret"><span>Iklan Settlement</span><strong>${fmt(a.biayaIklanSettlement || 0)}</strong></div>
+    <div class="secret"><span>Iklan Top Up</span><strong>${fmt(a.biayaIklanTopup || 0)}</strong></div>
     <div class="secret"><span>Total HPP + Packing + Iklan</span><strong>${fmt(a.totalBiaya || 0)}</strong></div>
     <div><span>Retur/Cancel</span><strong>${fmt(a.returCancel ?? a.refund)}</strong></div>
     <div><span>Dana Tertahan</span><strong>${fmt(a.danaTertahan || 0)}</strong></div>
