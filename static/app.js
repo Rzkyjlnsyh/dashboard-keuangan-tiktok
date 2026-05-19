@@ -178,9 +178,11 @@ function render(summary) {
   const viewOmzet = hasBook ? Number(t.bookOmzet || 0) : Number(t.omzet || 0);
   const viewProfit = hasBook ? Number(t.bookProfit || 0) : Number(t.profit || 0);
   const viewMargin = hasBook ? Number(t.bookMargin || 0) : Number(t.margin || 0);
-  const viewPlatform = hasBook ? Number(t.bookPlatformFee || 0) : Number(t.platformFee || 0);
+  const viewPlatform = hasBook ? Number(t.bookPlatformFeeFinal || 0) : Number(t.platformFeeFinal || 0);
+  const viewPlatformEstimated = hasBook ? Number(t.bookPlatformFeeEstimated || 0) : Number(t.platformFeeEstimated || 0);
   const viewSettlement = hasBook ? Number(t.bookSettlement || 0) : Number(t.settlement || 0);
   const viewHeld = hasBook ? Number(t.bookHeld || 0) : Number(t.held || 0);
+  const incomeMissing = hasBook && !viewSettlement && Number(t.estimatedOrders || 0) > 0;
   const viewHppPacking = hasBook
     ? Number(t.bookHpp || 0) + Number(t.bookPacking || 0)
     : Number(t.hpp || 0) + Number(t.packing || 0);
@@ -192,11 +194,15 @@ function render(summary) {
   el("margin").textContent = "Diskon seller";
   el("finalProfit").textContent = fmtCompact(viewOmzet);
   el("finalProfitMeta").textContent = "Kotor - diskon seller";
-  el("estimatedProfit").textContent = fmtCompact(viewSettlement);
-  el("estimatedProfitMeta").textContent = hasBook ? "Dari income statement" : `${num(t.finalOrders || 0)} order cair`;
+  el("estimatedProfit").textContent = incomeMissing ? "Belum valid" : fmtCompact(viewSettlement);
+  el("estimatedProfitMeta").textContent = incomeMissing ? "Income belum match" : hasBook ? "Dari income statement" : `${num(t.finalOrders || 0)} order cair`;
   el("held").textContent = fmtCompact(viewHeld);
   el("heldMeta").textContent = hasBook ? "Omzet net - platform - settlement" : `${num(t.heldOrders || 0)} order belum cair`;
   el("platformFee").textContent = fmtCompact(viewPlatform);
+  const platformFeeEstimatedEl = document.getElementById("platformFeeEstimated");
+  if (platformFeeEstimatedEl) platformFeeEstimatedEl.textContent = fmtCompact(viewPlatformEstimated);
+  const platformFeeMetaEl = document.getElementById("platformFeeMeta");
+  if (platformFeeMetaEl) platformFeeMetaEl.textContent = viewPlatform ? "Dari income statement" : "Belum ada income match";
   el("adSpend").textContent = fmtCompact(t.adSpend);
   el("hpp").textContent = fmtCompact(viewHppPacking);
   const bookProfitEl = document.getElementById("bookProfit");

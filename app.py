@@ -41,11 +41,11 @@ AUDIT_FIELDS = {
 }
 NUMERIC_AUDIT_FIELDS = {"order_amount", "settlement_received", "platform_fee", "refund_amount", "quantity"}
 SECRET_TOTAL_KEYS = {
-    "platformFee", "platformDiscount", "hpp", "packing", "refund", "settlement", "profit",
+    "platformFee", "platformFeeFinal", "platformFeeEstimated", "platformDiscount", "hpp", "packing", "refund", "settlement", "profit",
     "profitBeforeAds", "adSpend", "margin", "finalProfit", "estimatedProfit", "finalProfitBeforeAds",
     "estimatedProfitBeforeAds", "finalAdSpend", "estimatedAdSpend", "finalMargin", "estimatedMargin",
     "sellerDiscount", "cancelledAmount",
-    "bookPlatformFee", "bookHpp", "bookPacking", "bookSettlement", "bookProfit", "bookProfitBeforeAds",
+    "bookPlatformFee", "bookPlatformFeeFinal", "bookPlatformFeeEstimated", "bookHpp", "bookPacking", "bookSettlement", "bookProfit", "bookProfitBeforeAds",
     "bookAdSpend", "bookMargin", "bookCancelledAmount",
     "bookHeld",
 }
@@ -102,6 +102,11 @@ def is_book_source(row):
 
 def actual_settlement_amount(row):
     return abs(float(row["settlement_received"] or 0)) if has_income_settlement(row) else 0
+
+
+def is_ad_income_type(value):
+    token = column_token(value)
+    return "ads" in token or "iklan" in token or "gmvmaxad" in token or "tiktokads" in token
 
 
 def normalize_order_id(value):
@@ -940,12 +945,14 @@ def compute_summary(filters=None):
     missing_cost = set()
     totals = {
         "orders": set(), "lines": 0, "qty": 0, "gross": 0, "sellerDiscount": 0, "omzet": 0, "platformFee": 0,
+        "platformFeeFinal": 0, "platformFeeEstimated": 0,
         "platformDiscount": 0, "hpp": 0, "packing": 0, "refund": 0, "settlement": 0, "held": 0,
         "cancelledAmount": 0, "profit": 0, "profitBeforeAds": 0, "adSpend": 0, "todayOrders": 0,
         "finalProfit": 0, "estimatedProfit": 0, "finalProfitBeforeAds": 0, "estimatedProfitBeforeAds": 0,
         "finalAdSpend": 0, "estimatedAdSpend": 0, "finalOmzet": 0, "estimatedOmzet": 0,
         "finalOrders": set(), "estimatedOrders": set(), "heldOrders": set(), "cancelledOrders": set(),
         "bookGross": 0, "bookSellerDiscount": 0, "bookOmzet": 0, "bookPlatformFee": 0,
+        "bookPlatformFeeFinal": 0, "bookPlatformFeeEstimated": 0,
         "bookSettlement": 0, "bookHpp": 0, "bookPacking": 0, "bookRefund": 0,
         "bookCancelledAmount": 0, "bookHeld": 0, "bookProfitBeforeAds": 0, "bookProfit": 0, "bookAdSpend": 0,
         "bookOrders": set(), "bookCancelledOrders": set(),
@@ -954,6 +961,9 @@ def compute_summary(filters=None):
     today = date.today().isoformat()
     for order_id, order_rows in groups.items():
         basis_rows = [r for r in order_rows if is_book_source(r)] or order_rows
+        basis_rows = [r for r in basis_rows if float(r["quantity"] or 0) <= 0 or float(r["hpp_per_unit"] or 0) > 0]
+        if not basis_rows:
+            continue
         first = basis_rows[0]
         created_day = (first["created_at"] or "")[:10] or "Tanpa tanggal"
         if start_date and created_day != "Tanpa tanggal":
@@ -971,10 +981,14 @@ def compute_summary(filters=None):
         settlement_total = max(actual_settlement_amount(r) for r in basis_rows)
         refund_total = sum(abs(float(r["refund_amount"] or 0)) for r in basis_rows)
         raw_platform_fee_total = sum(abs(float(r["platform_fee"] or 0)) for r in basis_rows)
-        derived_platform_fee = max(order_total - settlement_total, 0) if settlement_total else 0
-        platform_fee_total = max(raw_platform_fee_total, derived_platform_fee)
+        has_income = any(has_income_settlement(r) for r in basis_rows)
+        final_platform_fee_total = raw_platform_fee_total if has_income else 0
+        estimated_platform_fee_total = 0 if has_income else raw_platform_fee_total
+        platform_fee_total = final_platform_fee_total if has_income else estimated_platform_fee_total
         platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in basis_rows)
-        packing_total = sum(float(r["quantity"] or 0) * float(r["packing_per_unit"] or 0) for r in basis_rows)
+        package_ids = {str(r["tracking_id"] or "").strip() for r in basis_rows if str(r["tracking_id"] or "").strip()}
+        package_count = max(len(package_ids), 1)
+        packing_total = max([float(r["packing_per_unit"] or 0) for r in basis_rows] or [0]) * package_count
         cancelled = any(is_cancelled_status(r["status"]) for r in basis_rows)
         unpaid = any(is_unpaid_status(r["status"]) for r in basis_rows)
         excluded = cancelled or unpaid
@@ -1000,42 +1014,48 @@ def compute_summary(filters=None):
                 totals["bookRefund"] += cancelled_value
                 totals["bookCancelledAmount"] += cancelled_value
                 totals["bookCancelledOrders"].add(order_id)
-            continue
-        totals["omzet"] += order_total
-        if is_final:
-            totals["finalOrders"].add(order_id)
-            totals["finalOmzet"] += order_total
-        elif is_estimated:
-            totals["estimatedOrders"].add(order_id)
-            totals["estimatedOmzet"] += order_total
-        totals["gross"] += gross_sum
-        totals["sellerDiscount"] += seller_discount_total
-        totals["platformFee"] += platform_fee_total
-        totals["platformDiscount"] += platform_discount_total
-        totals["refund"] += refund_total
-        totals["settlement"] += settlement_total
-        if not settlement_total:
-            totals["held"] += order_total
-            totals["heldOrders"].add(order_id)
-        daily[created_day]["omzet"] += order_total
-        stores[store]["omzet"] += order_total
+        else:
+            totals["omzet"] += order_total
+            if is_final:
+                totals["finalOrders"].add(order_id)
+                totals["finalOmzet"] += order_total
+            elif is_estimated:
+                totals["estimatedOrders"].add(order_id)
+                totals["estimatedOmzet"] += order_total
+            totals["gross"] += gross_sum
+            totals["sellerDiscount"] += seller_discount_total
+            totals["platformFee"] += platform_fee_total
+            totals["platformFeeFinal"] += final_platform_fee_total
+            totals["platformFeeEstimated"] += estimated_platform_fee_total
+            totals["platformDiscount"] += platform_discount_total
+            totals["refund"] += refund_total
+            totals["settlement"] += settlement_total
+            held_for_order = max(order_total - platform_fee_total - settlement_total, 0) if has_income else 0
+            if held_for_order > 0 or (not has_income and not settlement_total):
+                totals["held"] += held_for_order
+                totals["heldOrders"].add(order_id)
+            daily[created_day]["omzet"] += order_total
+            stores[store]["omzet"] += order_total
         book_order = any(is_book_source(r) for r in basis_rows)
-        if book_order:
+        if book_order and not excluded:
             totals["bookOrders"].add(order_id)
             totals["bookGross"] += gross_sum
             totals["bookSellerDiscount"] += seller_discount_total
             totals["bookOmzet"] += order_total
             totals["bookPlatformFee"] += platform_fee_total
+            totals["bookPlatformFeeFinal"] += final_platform_fee_total
+            totals["bookPlatformFeeEstimated"] += estimated_platform_fee_total
             totals["bookSettlement"] += settlement_total
+            totals["bookHeld"] += held_for_order
         for r in basis_rows:
             qty = float(r["quantity"] or 0)
             line_gross = abs(float(r["gross_product"] or 0))
             share = (line_gross / gross_sum) if gross_sum else (1 / len(order_rows))
-            omzet = order_total * share
-            platform_fee = platform_fee_total * share
-            refund = refund_total * share
+            omzet = 0 if excluded else order_total * share
+            platform_fee = 0 if excluded else platform_fee_total * share
+            refund = 0 if excluded else refund_total * share
             hpp = qty * float(r["hpp_per_unit"] or 0)
-            packing = qty * float(r["packing_per_unit"] or 0)
+            packing = packing_total * share
             profit = omzet - platform_fee - refund - hpp - packing
             totals["qty"] += qty
             totals["hpp"] += hpp
@@ -1051,10 +1071,6 @@ def compute_summary(filters=None):
                 totals["estimatedProfitBeforeAds"] += profit
             daily[created_day]["profit"] += profit
             stores[store]["profit"] += profit
-            if qty and not (r["hpp_per_unit"] or r["packing_per_unit"]):
-                missing_cost.add(r["sku"])
-                if book_order:
-                    book_missing_cost.add(r["sku"])
             key = r["sku"] or "Tanpa SKU"
             sku.setdefault(
                 key,
@@ -1084,8 +1100,6 @@ def compute_summary(filters=None):
             sku[key]["packing"] += packing
             sku[key]["platformFee"] += platform_fee
             sku[key]["refund"] += refund
-            if qty and not (r["hpp_per_unit"] or r["packing_per_unit"]):
-                sku[key]["missingCost"] = True
     ad_rows = filtered_ad_spend(filters, start_date, end_date)
     ad_by_store = {}
     for expense in ad_rows:
@@ -1100,7 +1114,6 @@ def compute_summary(filters=None):
         ad_by_store[store] = ad_by_store.get(store, 0) + amount
     totals["profitBeforeAds"] = totals["profit"]
     totals["bookAdSpend"] = totals["adSpend"]
-    totals["bookHeld"] = max(totals["bookOmzet"] - totals["bookPlatformFee"] - totals["bookSettlement"], 0)
     totals["bookProfit"] = totals["bookProfitBeforeAds"] - totals["bookAdSpend"]
     if totals["omzet"]:
         totals["finalAdSpend"] = totals["adSpend"] * (totals["finalOmzet"] / totals["omzet"])
@@ -1184,7 +1197,7 @@ def compute_summary(filters=None):
         alerts.append({"level": "warn", "title": "Margin tipis", "body": f"Margin bersih sementara {margin_text}%."})
     if totals["adSpend"] and primary_omzet and totals["adSpend"] / primary_omzet > 0.2:
         alerts.append({"level": "warn", "title": "Biaya iklan tinggi", "body": "Biaya iklan lebih dari 20% omset periode ini."})
-    if totals["bookOmzet"] and not totals["bookSettlement"] and totals["bookHeld"]:
+    if totals["bookOmzet"] and not totals["bookSettlement"] and len(totals["estimatedOrders"]):
         alerts.append({
             "level": "warn",
             "title": "Pencairan belum valid",
@@ -1392,6 +1405,8 @@ def build_assistant(totals, margin, top_sku, weak_sku, missing_cost, daily_list)
             "hpp": float(totals.get("bookHpp" if has_book else "hpp", 0) or 0),
             "packing": float(totals.get("bookPacking" if has_book else "packing", 0) or 0),
             "potonganPlatform": float(totals.get("bookPlatformFee" if has_book else "platformFee", 0) or 0),
+            "potonganPlatformFinal": float(totals.get("bookPlatformFeeFinal" if has_book else "platformFeeFinal", 0) or 0),
+            "potonganPlatformEstimasi": float(totals.get("bookPlatformFeeEstimated" if has_book else "platformFeeEstimated", 0) or 0),
             "biayaIklan": ad_spend,
             "totalBiaya": ((float(totals.get("bookHpp", 0) or 0) + float(totals.get("bookPacking", 0) or 0)) if has_book else hpp_total) + ad_spend,
             "danaTertahan": float(totals.get("bookHeld" if has_book else "held", 0) or 0),
