@@ -765,6 +765,7 @@ def import_income_excel(path, store_name=None):
             refund = abs(float(rupiah(row_value(r, "Refund subtotal after seller discounts", "Subtotal pengembalian dana setelah diskon penjual"))))
             total_fees = abs(float(rupiah(row_value(r, "Total Fees", "Total Biaya", "Jumlah biaya", "Total biaya"))))
             ad_fee = abs(float(rupiah(row_value(r, "GMV Max ad fee", "GMV Max Ad Fee", "Biaya iklan GMV Max", "Biaya Iklan GMV Max", "TikTok Ads fee", "Biaya TikTok Ads"))))
+            ad_fee += abs(float(rupiah(row_value(r, "Affiliate Shop Ads commission", "Affiliate Partner shop ads commission", "Campaign resource fee"))))
             adjustment = float(rupiah(row_value(r, "Ajustment amount", "Adjustment amount", "Jumlah penyesuaian")))
             if ad_fee > 0:
                 spend_date = (parse_dt(row_value(r, "Order settled time", "Waktu pembayaran pesanan", "Waktu penyelesaian pesanan", "Waktu penyelesaian pembayaran")) or parse_dt(row_value(r, "Order created time", "Waktu pemesanan")) or date.today().isoformat())[:10]
