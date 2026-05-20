@@ -157,7 +157,55 @@ def actual_settlement_amount(row):
 
 def is_ad_income_type(value):
     token = column_token(value)
-    return "ads" in token or "iklan" in token or "gmvmaxad" in token or "tiktokads" in token
+    return "ads" in token or "iklan" in token or "gmvmaxad" in token or "tiktokads" in token or "gmvpayment" in token
+
+
+SETTLEMENT_AD_FIELD_GROUPS = [
+    [
+        "GMV Max ad fee",
+        "GMV Max ads fee",
+        "GMV Max Ads Fee",
+        "GMV max advertising fee",
+        "TikTok Ads fee",
+        "TikTok Shop Ads fee",
+        "Biaya iklan GMV Max",
+        "Biaya Iklan GMV Max",
+        "Biaya iklan GMV Maks",
+        "Biaya Iklan GMV Maks",
+        "Iklan GMV Max",
+        "Biaya GMV Max",
+    ],
+    [
+        "Affiliate Shop Ads commission",
+        "Affiliate Partner shop ads commission",
+        "Komisi Iklan Affiliate Shop",
+        "Komisi Iklan Toko Afiliasi",
+        "Komisi iklan toko afiliasi",
+    ],
+    [
+        "Campaign resource fee",
+        "Campaign Resource Fee",
+        "Biaya resource campaign",
+        "Biaya sumber daya kampanye",
+    ],
+]
+
+
+def sum_field_groups(row, groups):
+    seen = set()
+    total = 0
+    keys = list(row.keys())
+    for names in groups:
+        matched = None
+        for key in keys:
+            if any(column_token(name) == column_token(key) for name in names):
+                matched = key
+                break
+        if not matched or column_token(matched) in seen:
+            continue
+        seen.add(column_token(matched))
+        total += abs(float(rupiah(row.get(matched))))
+    return total
 
 
 def normalize_order_id(value):
@@ -746,15 +794,13 @@ def import_income_excel(path, store_name=None):
         by_order = {}
         for row in existing_rows:
             by_order.setdefault(str(row["order_id"] or "").strip(), []).append(dict(row))
+        ad_spend_rows = 0
+        ad_spend_total = 0
         for _, r in df.iterrows():
             transaction_id = normalize_order_id(row_value(r, "Order/adjustment ID", "Order adjustment ID", "ID Pesanan/Penyesuaian"))
             related_order = normalize_order_id(row_value(r, "Related order ID", "Related order ID  ", "ID pesanan terkait", "ID Pesanan Terkait"))
             order_id = related_order if related_order and related_order != "/" else transaction_id
             if not order_id:
-                continue
-            existing_group = by_order.get(order_id, [])
-            if not existing_group:
-                skipped += 1
                 continue
             income_type = str(row_value(r, "Type", "Jenis transaksi")).strip()
             settlement = float(rupiah(row_value(r, "Total settlement amount", "Jumlah penyelesaian pembayaran")))
@@ -764,17 +810,26 @@ def import_income_excel(path, store_name=None):
             seller_discount = abs(float(rupiah(row_value(r, "Seller discounts", "Diskon penjual"))))
             refund = abs(float(rupiah(row_value(r, "Refund subtotal after seller discounts", "Subtotal pengembalian dana setelah diskon penjual"))))
             total_fees = abs(float(rupiah(row_value(r, "Total Fees", "Total Biaya", "Jumlah biaya", "Total biaya"))))
-            ad_fee = abs(float(rupiah(row_value(r, "GMV Max ad fee", "GMV Max Ad Fee", "Biaya iklan GMV Max", "Biaya Iklan GMV Max", "TikTok Ads fee", "Biaya TikTok Ads"))))
-            ad_fee += abs(float(rupiah(row_value(r, "Affiliate Shop Ads commission", "Affiliate Partner shop ads commission", "Campaign resource fee"))))
             adjustment = float(rupiah(row_value(r, "Ajustment amount", "Adjustment amount", "Jumlah penyesuaian")))
+            explicit_ad_fee = sum_field_groups(r, SETTLEMENT_AD_FIELD_GROUPS)
+            type_ad_fee = abs(settlement or adjustment or total_fees or 0) if is_ad_income_type(income_type) else 0
+            ad_fee = explicit_ad_fee or type_ad_fee
             if ad_fee > 0:
                 spend_date = (parse_dt(row_value(r, "Order settled time", "Waktu pembayaran pesanan", "Waktu penyelesaian pesanan", "Waktu penyelesaian pembayaran")) or parse_dt(row_value(r, "Order created time", "Waktu pemesanan")) or date.today().isoformat())[:10]
-                campaign = f"{Path(path).name}:{transaction_id or order_id}:ads"
+                campaign = f"{transaction_id or order_id or spend_date}:gmv-ads"
                 conn.execute("DELETE FROM ad_spend WHERE lower(store_name)=lower(?) AND spend_date=? AND channel=? AND campaign=?", (selected_store, spend_date, "TikTok Ads Settlement", campaign))
                 conn.execute(
                     "INSERT INTO ad_spend (store_name, spend_date, amount, channel, campaign, note, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (selected_store, spend_date, ad_fee, "TikTok Ads Settlement", campaign, f"Terdeteksi dari income statement: {income_type or 'ads'}", now_iso(), now_iso()),
+                    (selected_store, spend_date, ad_fee, "TikTok Ads Settlement", campaign, f"Terdeteksi dari income statement: {income_type or 'ads'} ({Path(path).name})", now_iso(), now_iso()),
                 )
+                ad_spend_rows += 1
+                ad_spend_total += ad_fee
+            existing_group = by_order.get(order_id, [])
+            if not existing_group:
+                if ad_fee > 0:
+                    continue
+                skipped += 1
+                continue
             income_settlement = max(0, settlement)
             order_amount = abs(after_discount or total_revenue or before_discount)
             income_fee = total_fees or (max(order_amount - income_settlement, 0) if income_settlement else 0) or (abs(settlement) if settlement < 0 else 0) or (abs(adjustment) if adjustment < 0 else 0)
@@ -805,8 +860,11 @@ def import_income_excel(path, store_name=None):
                 updated += action == "updated"
                 unchanged += action == "unchanged"
                 audit_count += changes
-        finish_import_run(conn, run_id, len(df), inserted, updated, unchanged + skipped, audit_count, f"Income statement diperbarui; {skipped} baris tanpa order lama dilewati" if skipped else "Income statement diperbarui")
-    return {"kind": "income", "storeName": selected_store, "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": unchanged + skipped, "skipped": skipped, "auditCount": audit_count}
+        message = f"Income statement diperbarui; {skipped} baris tanpa order lama dilewati" if skipped else "Income statement diperbarui"
+        if ad_spend_rows:
+            message += f"; Iklan GMV settlement terdeteksi {ad_spend_rows} transaksi"
+        finish_import_run(conn, run_id, len(df), inserted, updated, unchanged + skipped, audit_count, message)
+    return {"kind": "income", "storeName": selected_store, "rows": len(df), "inserted": inserted, "updated": updated, "unchanged": unchanged + skipped, "skipped": skipped, "auditCount": audit_count, "adSpendRows": ad_spend_rows, "adSpendTotal": ad_spend_total}
 
 
 def detect_and_import(path, kind="auto", store_name=DEFAULT_STORE):

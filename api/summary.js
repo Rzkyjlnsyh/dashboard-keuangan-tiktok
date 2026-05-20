@@ -1,4 +1,4 @@
-const { json, buildFilters, computeSummary, redactSummary, emptySummary } = require("../lib/finance-cloud");
+const { json, buildFilters, computeSummary, redactSummary, emptySummary, requireOwner } = require("../lib/finance-cloud");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "GET") return json(res, 405, { ok: false, error: "Method tidak didukung." });
@@ -11,6 +11,7 @@ module.exports = async function handler(req, res) {
     });
     const summary = await computeSummary(filters);
     const role = query.role || "owner";
+    if (role === "owner" && !(await requireOwner(req, res))) return;
     return json(res, 200, role === "owner" ? summary : redactSummary(summary, role));
   } catch (error) {
     return json(res, 200, emptySummary(error.message));

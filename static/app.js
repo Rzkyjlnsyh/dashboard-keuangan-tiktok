@@ -495,37 +495,100 @@ function renderAdSpendRows(rows) {
     </div>`).join("") || "Belum ada biaya iklan.";
 }
 
-function drawTrend(rows) {
+function drawTrend(rows = []) {
   const canvas = el("trend");
+  const statBox = el("trendStats");
   const ctx = canvas.getContext("2d");
   const w = canvas.width, h = canvas.height;
+  const cleanRows = (rows || [])
+    .filter(row => row && row.date)
+    .map(row => ({
+      ...row,
+      omzet: Number(row.omzet || 0),
+      profit: Number(row.profit || 0),
+      orders: Number(row.orders || 0),
+    }));
+  const ownerView = state.accessRole === "owner";
+  const totalOmzet = cleanRows.reduce((sum, row) => sum + row.omzet, 0);
+  const totalProfit = cleanRows.reduce((sum, row) => sum + row.profit, 0);
+  const totalOrders = cleanRows.reduce((sum, row) => sum + row.orders, 0);
+  const avgOmzet = cleanRows.length ? totalOmzet / cleanRows.length : 0;
+  const bestDay = cleanRows.reduce((best, row) => row.omzet > (best.omzet || 0) ? row : best, cleanRows[0] || {});
+  if (statBox) {
+    const cards = [
+      ["Omset periode", fmtCompact(totalOmzet), `${cleanRows.length} hari data`],
+      ["Rata-rata/hari", fmtCompact(avgOmzet), "Berdasarkan data filter"],
+      ["Hari tertinggi", fmtCompact(bestDay.omzet || 0), bestDay.date || "-"],
+      ownerView ? ["Profit grafik", fmtCompact(totalProfit), totalOmzet ? `${pct(totalProfit / totalOmzet * 100)} margin` : "Belum ada omzet"] : ["Order grafik", num(totalOrders), "Total order di grafik"],
+    ];
+    statBox.innerHTML = cards.map(([label, value, meta]) => `
+      <div><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><em>${escapeHtml(meta)}</em></div>
+    `).join("");
+  }
   ctx.clearRect(0, 0, w, h);
   const grd = ctx.createLinearGradient(0, 0, 0, h);
   grd.addColorStop(0, "#172536");
   grd.addColorStop(1, "#0f141b");
   ctx.fillStyle = grd;
   ctx.fillRect(0, 0, w, h);
-  if (!rows.length) return;
-  const pad = 42;
-  const max = Math.max(...rows.map(r => Math.max(r.omzet, r.profit)), 1);
-  const x = (i) => pad + (w - pad * 2) * (i / Math.max(rows.length - 1, 1));
-  const y = (v) => h - pad - (h - pad * 2) * (v / max);
+  if (!cleanRows.length) {
+    ctx.fillStyle = "#aeb7c6";
+    ctx.font = "16px sans-serif";
+    ctx.fillText("Belum ada data grafik untuk filter ini.", 42, h / 2);
+    return;
+  }
+  const pad = 54;
+  const values = cleanRows.flatMap(row => ownerView ? [row.omzet, row.profit] : [row.omzet]);
+  const min = Math.min(0, ...values);
+  const max = Math.max(...values, 1);
+  const span = Math.max(max - min, 1);
+  const x = (i) => pad + (w - pad * 2) * (i / Math.max(cleanRows.length - 1, 1));
+  const y = (v) => h - pad - (h - pad * 2) * ((v - min) / span);
   ctx.strokeStyle = "rgba(255,255,255,.08)";
   ctx.lineWidth = 1;
+  ctx.fillStyle = "#7f8997";
+  ctx.font = "12px sans-serif";
+  ctx.textAlign = "right";
   for (let i = 0; i < 5; i++) {
     const yy = pad + i * ((h - pad * 2) / 4);
     ctx.beginPath(); ctx.moveTo(pad, yy); ctx.lineTo(w - pad, yy); ctx.stroke();
+    const value = max - (span * i / 4);
+    ctx.fillText(fmtCompact(value).replace("Rp", ""), pad - 8, yy + 4);
+  }
+  if (min < 0) {
+    const zeroY = y(0);
+    ctx.strokeStyle = "rgba(216,173,99,.28)";
+    ctx.beginPath(); ctx.moveTo(pad, zeroY); ctx.lineTo(w - pad, zeroY); ctx.stroke();
   }
   line("omzet", "#67d3ff");
-  if (state.accessRole === "owner") line("profit", "#e7b96d");
+  if (ownerView) line("profit", "#e7b96d");
   ctx.fillStyle = "#aeb7c6";
   ctx.font = "13px sans-serif";
-  ctx.fillText("Omset", pad, 20);
-  if (state.accessRole === "owner") ctx.fillText("Profit", pad + 62, 20);
+  ctx.textAlign = "left";
+  ctx.fillText("Omset", pad, 22);
+  if (ownerView) ctx.fillText("Profit", pad + 72, 22);
+  ctx.fillStyle = "#7f8997";
+  ctx.font = "12px sans-serif";
+  const labelIndexes = Array.from(new Set([0, Math.floor((cleanRows.length - 1) / 2), cleanRows.length - 1]));
+  labelIndexes.forEach((index) => {
+    const row = cleanRows[index];
+    if (!row) return;
+    const xx = x(index);
+    ctx.textAlign = index === 0 ? "left" : index === cleanRows.length - 1 ? "right" : "center";
+    ctx.fillText(String(row.date).slice(5), xx, h - 16);
+  });
   function line(key, color) {
     ctx.strokeStyle = color; ctx.lineWidth = 3; ctx.beginPath();
-    rows.forEach((r, i) => i ? ctx.lineTo(x(i), y(r[key])) : ctx.moveTo(x(i), y(r[key])));
+    cleanRows.forEach((r, i) => i ? ctx.lineTo(x(i), y(r[key])) : ctx.moveTo(x(i), y(r[key])));
     ctx.stroke();
+    ctx.fillStyle = color;
+    cleanRows.forEach((r, i) => {
+      const xx = x(i);
+      const yy = y(r[key]);
+      ctx.beginPath();
+      ctx.arc(xx, yy, 3, 0, Math.PI * 2);
+      ctx.fill();
+    });
   }
 }
 
@@ -641,18 +704,23 @@ el("sampleBtn").addEventListener("click", async () => {
 });
 document.getElementById("uploadForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  let uploadResults = [];
   try {
     if (isCloudPreview) {
       if (!window.CloudFinance) throw new Error("Mode upload online belum siap. Refresh halaman Vercel lalu coba lagi.");
-      await window.CloudFinance.uploadForm(event.target, api, showNotice);
+      uploadResults = await window.CloudFinance.uploadForm(event.target, api, showNotice);
     } else {
       const fd = new FormData(event.target);
-      await api("/api/upload", { method: "POST", body: fd });
+      uploadResults = [await api("/api/upload", { method: "POST", body: fd })];
     }
     el("fileInput").value = "";
     await refresh();
     setView("owner");
-    showNotice(isCloudPreview ? "Upload selesai dan data tersimpan ke Supabase." : "Upload selesai dan dashboard diperbarui.", "info");
+    const flatResults = uploadResults.flatMap(item => item && item.results ? item.results : [item]).filter(Boolean);
+    const adRows = flatResults.reduce((sum, item) => sum + Number(item.adSpendRows || 0), 0);
+    const adTotal = flatResults.reduce((sum, item) => sum + Number(item.adSpendTotal || 0), 0);
+    const adText = adRows ? ` Iklan GMV settlement terdeteksi ${adRows} transaksi (${fmtCompact(adTotal)}).` : "";
+    showNotice((isCloudPreview ? "Upload selesai dan data tersimpan ke Supabase." : "Upload selesai dan dashboard diperbarui.") + adText, "info");
   } catch (err) {
     showNotice(err.message);
   }

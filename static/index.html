@@ -34,6 +34,15 @@
         <strong id="generatedAt">-</strong>
         <button id="refreshBtn">Refresh</button>
       </div>
+      <div class="access-card">
+        <span>Akses dashboard</span>
+        <div>
+          <a href="/owner">Owner</a>
+          <a href="/team">Tim</a>
+          <a href="/tv">TV</a>
+        </div>
+        <p>Owner berisi profit, HPP, iklan, dan data rahasia. Tim hanya melihat data operasional.</p>
+      </div>
     </aside>
 
     <main>
@@ -99,6 +108,7 @@
           <div class="panel-head">
             <div><span>Trend</span><strong id="trendTitle">Omset & Profit 30 Hari</strong></div>
           </div>
+          <div id="trendStats" class="trend-stats"></div>
           <canvas id="trend" width="900" height="280"></canvas>
         </article>
         <article class="panel">
@@ -285,7 +295,7 @@
     </main>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="/static/cloud.js?v=20260514-xlsx-server"></script>
-  <script src="/static/app.js?v=20260514-xlsx-server"></script>
+  <script src="/static/cloud.js?v=20260520-gmv-access"></script>
+  <script src="/static/app.js?v=20260520-gmv-access"></script>
 </body>
 </html>

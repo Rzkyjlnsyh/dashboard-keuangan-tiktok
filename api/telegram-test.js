@@ -1,7 +1,8 @@
-const { json, telegramReportSummaries, sendTelegram } = require("../lib/finance-cloud");
+const { json, telegramReportSummaries, sendTelegram, requireOwner } = require("../lib/finance-cloud");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { ok: false, error: "Method tidak didukung." });
+  if (!(await requireOwner(req, res))) return;
   try {
     const { yesterdaySummary, last30Summary } = await telegramReportSummaries();
     await sendTelegram(yesterdaySummary, last30Summary);

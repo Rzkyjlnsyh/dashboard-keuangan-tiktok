@@ -1,7 +1,8 @@
-const { json, readJson, importRows } = require("../lib/finance-cloud");
+const { json, readJson, importRows, requireOwner } = require("../lib/finance-cloud");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { ok: false, error: "Method tidak didukung." });
+  if (!(await requireOwner(req, res))) return;
   try {
     const contentType = req.headers["content-type"] || "";
     if (contentType.includes("multipart/form-data")) {

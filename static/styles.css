@@ -46,7 +46,7 @@ button:hover { transform: translateY(-1px); border-color: rgba(216,173,99,.55); 
   color: #16110a; border-radius: 8px; font-weight: 900;
 }
 .brand strong { display: block; font-size: 17px; }
-.brand span, .sync-card span, .panel-head span, .kpis span, .eyebrow { color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
+.brand span, .sync-card span, .access-card span, .panel-head span, .kpis span, .eyebrow { color: var(--muted); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; }
 nav { display: grid; gap: 10px; }
 nav button, .hero-actions button, .upload, .sync-card button, .form button, .segments button {
   border: 1px solid var(--line);
@@ -71,6 +71,28 @@ nav button.active, .hero-actions button:first-child, .upload, .form button:first
   display: grid;
   gap: 10px;
 }
+.access-card {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid rgba(216,173,99,.18);
+  background: rgba(255,255,255,.035);
+  border-radius: 8px;
+  display: grid;
+  gap: 10px;
+}
+.access-card div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.access-card a {
+  text-align: center;
+  text-decoration: none;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 8px;
+  background: rgba(255,255,255,.05);
+  font-weight: 800;
+}
+.access-card a:hover { border-color: rgba(216,173,99,.55); color: #ffe1a8; }
+.access-card p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
 main { padding: 28px; overflow: hidden; }
 .hero {
   min-height: 210px;
@@ -231,6 +253,21 @@ select, input[type="month"], input[type="file"] {
   padding: 10px 12px;
 }
 canvas { width: 100%; height: 280px; }
+.trend-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.trend-stats div {
+  border: 1px solid rgba(255,255,255,.09);
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: rgba(255,255,255,.035);
+}
+.trend-stats span { display: block; color: var(--muted); font-size: 11px; letter-spacing: .06em; text-transform: uppercase; }
+.trend-stats strong { display: block; margin-top: 5px; font-size: 18px; }
+.trend-stats em { display: block; margin-top: 4px; color: var(--muted); font-size: 12px; font-style: normal; }
 .status-list { display: grid; gap: 10px; }
 .status-row { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: center; padding: 10px; border: 1px solid rgba(255,255,255,.08); border-radius: 8px; background: rgba(255,255,255,.035); }
 .bar { height: 8px; background: rgba(255,255,255,.08); border-radius: 999px; overflow: hidden; grid-column: 1 / -1; }
@@ -421,6 +458,7 @@ body.team .hero-actions { display: none; }
     align-items: center;
   }
   .sync-card span { grid-column: 1 / -1; }
+  .access-card { margin-top: 10px; }
   .hero { grid-template-columns: 1fr; }
   .hero-actions { justify-content: flex-start; }
   .kpis, .grid, .filters { grid-template-columns: 1fr 1fr; }
@@ -452,7 +490,7 @@ body.team .hero-actions { display: none; }
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .segments button { padding: 11px 9px; }
-  .kpis, .grid, .filters, .forecast, .accounting, .mini-kpis, .store-cards, .operation-cards { grid-template-columns: 1fr; }
+  .kpis, .grid, .filters, .forecast, .accounting, .mini-kpis, .store-cards, .operation-cards, .trend-stats { grid-template-columns: 1fr; }
   .kpis { gap: 10px; }
   .kpis article { min-height: 118px; }
   .kpis strong, .forecast strong, .accounting strong, .store-cards strong, .mini-kpis strong { font-size: 20px; }

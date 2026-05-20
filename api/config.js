@@ -1,4 +1,4 @@
-const { json, readJson, readConfig, saveConfig, safeConfig, supabaseConfigured, supabaseSetupMessage } = require("../lib/finance-cloud");
+const { json, readJson, readConfig, saveConfig, safeConfig, supabaseConfigured, supabaseSetupMessage, requireOwner } = require("../lib/finance-cloud");
 
 module.exports = async function handler(req, res) {
   try {
@@ -7,6 +7,7 @@ module.exports = async function handler(req, res) {
       return json(res, 200, { ...safeConfig(config), supabaseConnected: supabaseConfigured(), supabaseMessage: supabaseConfigured() ? "" : supabaseSetupMessage() });
     }
     if (req.method === "POST") {
+      if (!(await requireOwner(req, res))) return;
       const body = await readJson(req);
       const config = await saveConfig(body);
       return json(res, 200, { ok: true, ...config });
