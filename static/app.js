@@ -1,5 +1,6 @@
 const routeRole = location.pathname.includes("tv") ? "tv" : location.pathname.includes("team") ? "team" : "owner";
 const isCloudPreview = !["127.0.0.1", "localhost", ""].includes(location.hostname) && location.protocol !== "file:";
+const defaultStores = ["ventura", "giftyours", "custombase"];
 const state = {
   view: routeRole === "tv" ? "tv" : routeRole === "team" ? "team" : "owner",
   accessRole: routeRole,
@@ -161,6 +162,7 @@ async function refresh() {
 }
 
 function populateStores(stores) {
+  stores = Array.from(new Set([...(stores || []), ...defaultStores])).filter(Boolean);
   const options = [`<option value="all">Semua Toko</option>`].concat(
     stores.map(s => `<option value="${s}">${s}</option>`)
   ).join("");
@@ -174,9 +176,10 @@ function populateStores(stores) {
   el("uploadStore").innerHTML = uploadOptions;
   el("folderStore").innerHTML = uploadOptions;
   el("adStore").innerHTML = uploadOptions;
-  if (uploadValue) el("uploadStore").value = uploadValue;
-  if (folderValue) el("folderStore").value = folderValue;
-  if (adValue) el("adStore").value = adValue;
+  const firstStore = stores[0] || "ventura";
+  el("uploadStore").value = stores.includes(uploadValue) ? uploadValue : firstStore;
+  el("folderStore").value = stores.includes(folderValue) ? folderValue : firstStore;
+  el("adStore").value = stores.includes(adValue) ? adValue : firstStore;
 }
 
 function populateMonths(months) {
@@ -209,8 +212,9 @@ function render(summary) {
   const viewOmzet = hasBook ? Number(t.bookOmzet || 0) : Number(t.omzet || 0);
   const viewProfit = hasBook ? Number(t.bookProfit || 0) : Number(t.profit || 0);
   const viewMargin = hasBook ? Number(t.bookMargin || 0) : Number(t.margin || 0);
-  const viewPlatform = hasBook ? Number(t.bookPlatformFeeFinal || 0) : Number(t.platformFeeFinal || 0);
+  const viewPlatformFinal = hasBook ? Number(t.bookPlatformFeeFinal || 0) : Number(t.platformFeeFinal || 0);
   const viewPlatformEstimated = hasBook ? Number(t.bookPlatformFeeEstimated || 0) : Number(t.platformFeeEstimated || 0);
+  const viewPlatform = viewPlatformFinal + viewPlatformEstimated;
   const viewSettlement = hasBook ? Number(t.bookSettlement || 0) : Number(t.settlement || 0);
   const viewHeld = hasBook ? Number(t.bookHeld || 0) : Number(t.held || 0);
   const incomeMissing = hasBook && !viewSettlement && Number(t.estimatedOrders || 0) > 0;
@@ -219,7 +223,7 @@ function render(summary) {
     : Number(t.hpp || 0) + Number(t.packing || 0);
   el("generatedAt").textContent = summary.generatedAt;
   el("orders").textContent = num(viewOrders);
-  el("todayOrders").textContent = hasBook ? `Retur/cancel ${num(t.bookCancelledOrders || 0)}` : "Hari ini " + num(t.todayOrders);
+  el("todayOrders").textContent = hasBook ? `Retur/cancel ${num(t.bookCancelledOrders || 0)} order` : "Hari ini " + num(t.todayOrders);
   el("omzet").textContent = fmtCompact(viewGross);
   el("profit").textContent = fmtCompact(viewDiscount);
   el("margin").textContent = "Diskon seller";
@@ -230,10 +234,18 @@ function render(summary) {
   el("held").textContent = fmtCompact(viewHeld);
   el("heldMeta").textContent = hasBook ? "Omzet net - platform - settlement" : `${num(t.heldOrders || 0)} order belum cair`;
   el("platformFee").textContent = fmtCompact(viewPlatform);
-  const platformFeeEstimatedEl = document.getElementById("platformFeeEstimated");
-  if (platformFeeEstimatedEl) platformFeeEstimatedEl.textContent = fmtCompact(viewPlatformEstimated);
   const platformFeeMetaEl = document.getElementById("platformFeeMeta");
-  if (platformFeeMetaEl) platformFeeMetaEl.textContent = viewPlatform ? "Dari income statement" : "Belum ada income match";
+  if (platformFeeMetaEl) {
+    platformFeeMetaEl.textContent = `Sudah cair ${fmtCompact(viewPlatformFinal)} · belum cair ${fmtCompact(viewPlatformEstimated)}`;
+  }
+  const cancelPackagesEl = document.getElementById("cancelPackages");
+  const cancelPackagesMetaEl = document.getElementById("cancelPackagesMeta");
+  if (cancelPackagesEl) cancelPackagesEl.textContent = num(hasBook ? t.bookCancelledPackages : t.cancelledPackages);
+  if (cancelPackagesMetaEl) {
+    const returnPackages = hasBook ? t.bookReturnPackages : t.returnPackages;
+    const cancelPackages = hasBook ? t.bookCancelPackages : t.cancelPackages;
+    cancelPackagesMetaEl.textContent = `Retur ${num(returnPackages || 0)} · Cancel ${num(cancelPackages || 0)}`;
+  }
   el("adSpend").textContent = fmtCompact(t.adSpend);
   const adSpendSettlementEl = document.getElementById("adSpendSettlement");
   if (adSpendSettlementEl) adSpendSettlementEl.textContent = fmtCompact(Number(t.adSpendSettlement || t.settlementAdSpend || 0));

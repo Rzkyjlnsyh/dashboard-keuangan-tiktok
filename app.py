@@ -68,6 +68,16 @@ def column_token(value):
     return "".join(ch for ch in clean_col(value).lower() if ch.isalnum())
 
 
+def configured_stores(stores=None):
+    merged = DEFAULT_STORES + list(stores or [])
+    seen = []
+    for store in merged:
+        normalized = normalize_store(store)
+        if normalized and normalized not in seen:
+            seen.append(normalized)
+    return seen
+
+
 def row_value(row, *names):
     lowered = {clean_col(key).lower(): value for key, value in row.items()}
     tokened = {column_token(key): value for key, value in row.items()}
@@ -243,7 +253,7 @@ def read_config():
         "lastMorningSent": "",
         "ownerPinHash": "",
     }
-    config.setdefault("stores", DEFAULT_STORES)
+    config["stores"] = configured_stores(config.get("stores", DEFAULT_STORES))
     config.setdefault("defaultStore", DEFAULT_STORE)
     config.setdefault("ownerPinHash", "")
     normalize_folder_monitors(config)
@@ -793,6 +803,8 @@ def import_income_excel(path, store_name=None):
         existing_rows = conn.execute("SELECT * FROM order_lines").fetchall()
         by_order = {}
         for row in existing_rows:
+            if normalize_store(row["store_name"] or DEFAULT_STORE) != selected_store:
+                continue
             by_order.setdefault(str(row["order_id"] or "").strip(), []).append(dict(row))
         ad_spend_rows = 0
         ad_spend_total = 0
@@ -1060,7 +1072,8 @@ def compute_summary(filters=None):
     start_date, end_date = date_range_from_filters(filters)
     groups = {}
     for r in rows:
-        groups.setdefault(r["order_id"] or r["line_key"], []).append(r)
+        group_key = f"{r['store_name'] or DEFAULT_STORE}|{r['order_id'] or r['line_key']}"
+        groups.setdefault(group_key, []).append(r)
     sku = {}
     daily = {}
     stores = {}
@@ -1081,22 +1094,84 @@ def compute_summary(filters=None):
         "bookSettlement": 0, "bookHpp": 0, "bookPacking": 0, "bookRefund": 0,
         "bookCancelledAmount": 0, "bookHeld": 0, "bookProfitBeforeAds": 0, "bookProfit": 0, "bookAdSpend": 0,
         "bookOrders": set(), "bookCancelledOrders": set(),
+        "cancelledPackages": 0, "returnPackages": 0, "cancelPackages": 0,
+        "bookCancelledPackages": 0, "bookReturnPackages": 0, "bookCancelPackages": 0,
     }
     book_missing_cost = set()
     today = date.today().isoformat()
     ad_rows = filtered_ad_spend(filters, start_date, end_date)
     for order_id, order_rows in groups.items():
-        basis_rows = [r for r in order_rows if is_book_source(r)] or order_rows
-        basis_rows = [r for r in basis_rows if float(r["quantity"] or 0) <= 0 or float(r["hpp_per_unit"] or 0) > 0]
-        if not basis_rows:
-            continue
-        first = basis_rows[0]
+        operation_rows = [r for r in order_rows if is_book_source(r)] or order_rows
+        first = operation_rows[0]
         created_day = (first["created_at"] or "")[:10] or "Tanpa tanggal"
         if start_date and created_day != "Tanpa tanggal":
             current_day = datetime.strptime(created_day, "%Y-%m-%d").date()
             if current_day < start_date or current_day > end_date:
                 continue
         if start_date and created_day == "Tanpa tanggal":
+            continue
+        operation_package_ids = {str(r["tracking_id"] or "").strip() for r in operation_rows if str(r["tracking_id"] or "").strip()}
+        operation_package_count = max(len(operation_package_ids), 1)
+        op_returned = any(is_return_status(r["status"]) for r in operation_rows)
+        op_cancel_only = any(is_cancel_status(r["status"]) for r in operation_rows) and not op_returned
+        op_unpaid = any(is_unpaid_status(r["status"]) for r in operation_rows)
+        totals["orders"].add(order_id)
+        totals["lines"] += len(operation_rows)
+        if created_day == today:
+            totals["todayOrders"] += 1
+        daily.setdefault(created_day, {"date": created_day, "orders": set(), "omzet": 0, "profit": 0})
+        daily[created_day]["orders"].add(order_id)
+        store = first["store_name"] or DEFAULT_STORE
+        stores.setdefault(store, {"store": store, "orders": set(), "omzet": 0, "profit": 0})
+        stores[store]["orders"].add(order_id)
+        for r in operation_rows:
+            status[r["status"] or "Tanpa status"] = status.get(r["status"] or "Tanpa status", 0) + 1
+        bucket = operation_bucket(first["status"], returned=op_returned, cancel_only=op_cancel_only, unpaid=op_unpaid)
+        age_days = day_age(created_day, today)
+        late = bucket in {"processing", "waiting_ship"} and age_days > 0
+        op = operation_summary.setdefault(bucket, {
+            "bucket": bucket,
+            "label": OPERATION_LABELS.get(bucket, "Lainnya"),
+            "orders": set(),
+            "packages": 0,
+            "late": 0,
+        })
+        op["orders"].add(order_id)
+        op["packages"] += operation_package_count
+        if late:
+            op["late"] += operation_package_count
+        tracking_ids = sorted(operation_package_ids)
+        operation_details.append({
+            "orderId": str(first["order_id"] or order_id),
+            "store": store,
+            "status": first["status"] or "Tanpa status",
+            "bucket": bucket,
+            "label": OPERATION_LABELS.get(bucket, "Lainnya"),
+            "packageCount": operation_package_count,
+            "itemQty": sum(float(r["quantity"] or 0) for r in operation_rows),
+            "skuCount": len({r["sku"] for r in operation_rows if r["sku"]}),
+            "createdAt": created_day,
+            "updatedAt": (first["updated_at"] or "")[:10],
+            "trackingId": ", ".join(tracking_ids),
+            "late": late,
+            "ageDays": age_days,
+        })
+        if op_returned or op_cancel_only:
+            totals["cancelledOrders"].add(order_id)
+            totals["cancelledPackages"] += operation_package_count
+            if op_returned:
+                totals["returnPackages"] += operation_package_count
+            if op_cancel_only:
+                totals["cancelPackages"] += operation_package_count
+            if any(is_book_source(r) for r in operation_rows):
+                totals["bookCancelledOrders"].add(order_id)
+                totals["bookCancelledPackages"] += operation_package_count
+                if op_returned:
+                    totals["bookReturnPackages"] += operation_package_count
+                if op_cancel_only:
+                    totals["bookCancelPackages"] += operation_package_count
+        basis_rows = [r for r in operation_rows if float(r["quantity"] or 0) <= 0 or float(r["hpp_per_unit"] or 0) > 0]
+        if not basis_rows:
             continue
         gross_sum = sum(abs(float(r["gross_product"] or 0)) for r in basis_rows)
         seller_discount_total = sum(abs(float(r["seller_discount"] or 0)) for r in basis_rows)
@@ -1113,66 +1188,22 @@ def compute_summary(filters=None):
         estimated_platform_fee_total = 0 if has_income else raw_platform_fee_total
         platform_fee_total = final_platform_fee_total if has_income else estimated_platform_fee_total
         platform_discount_total = sum(abs(float(r["platform_discount"] or 0)) for r in basis_rows)
-        package_ids = {str(r["tracking_id"] or "").strip() for r in basis_rows if str(r["tracking_id"] or "").strip()}
-        package_count = max(len(package_ids), 1)
+        package_count = operation_package_count
         packing_total = max([float(r["packing_per_unit"] or 0) for r in basis_rows] or [0]) * package_count
-        returned = any(is_return_status(r["status"]) for r in basis_rows)
-        cancel_only = any(is_cancel_status(r["status"]) for r in basis_rows) and not returned
-        unpaid = any(is_unpaid_status(r["status"]) for r in basis_rows)
+        returned = op_returned
+        cancel_only = op_cancel_only
+        unpaid = op_unpaid
         excluded = cancel_only or returned or unpaid
         cost_burned = returned or (not cancel_only and not unpaid)
         is_final = bool(settlement_total) and not excluded
         is_estimated = not settlement_total and not excluded
-        totals["orders"].add(order_id)
-        totals["lines"] += len(basis_rows)
-        if created_day == today:
-            totals["todayOrders"] += 1
-        daily.setdefault(created_day, {"date": created_day, "orders": set(), "omzet": 0, "profit": 0})
-        daily[created_day]["orders"].add(order_id)
-        store = first["store_name"] or "TikTok"
-        stores.setdefault(store, {"store": store, "orders": set(), "omzet": 0, "profit": 0})
-        stores[store]["orders"].add(order_id)
-        for r in basis_rows:
-            status[r["status"] or "Tanpa status"] = status.get(r["status"] or "Tanpa status", 0) + 1
-        bucket = operation_bucket(first["status"], returned=returned, cancel_only=cancel_only, unpaid=unpaid, is_final=is_final, is_estimated=is_estimated)
-        age_days = day_age(created_day, today)
-        late = bucket in {"processing", "waiting_ship"} and age_days > 0
-        op = operation_summary.setdefault(bucket, {
-            "bucket": bucket,
-            "label": OPERATION_LABELS.get(bucket, "Lainnya"),
-            "orders": set(),
-            "packages": 0,
-            "late": 0,
-        })
-        op["orders"].add(order_id)
-        op["packages"] += package_count
-        if late:
-            op["late"] += package_count
-        tracking_ids = sorted({str(r["tracking_id"] or "").strip() for r in basis_rows if str(r["tracking_id"] or "").strip()})
-        operation_details.append({
-            "orderId": str(first["order_id"] or order_id),
-            "store": store,
-            "status": first["status"] or "Tanpa status",
-            "bucket": bucket,
-            "label": OPERATION_LABELS.get(bucket, "Lainnya"),
-            "packageCount": package_count,
-            "itemQty": sum(float(r["quantity"] or 0) for r in basis_rows),
-            "skuCount": len({r["sku"] for r in basis_rows if r["sku"]}),
-            "createdAt": created_day,
-            "updatedAt": (first["updated_at"] or "")[:10],
-            "trackingId": ", ".join(tracking_ids),
-            "late": late,
-            "ageDays": age_days,
-        })
         if excluded:
             cancelled_value = refund_total or order_total
             totals["refund"] += cancelled_value
             totals["cancelledAmount"] += cancelled_value
-            totals["cancelledOrders"].add(order_id)
             if any(is_book_source(r) for r in basis_rows):
                 totals["bookRefund"] += cancelled_value
                 totals["bookCancelledAmount"] += cancelled_value
-                totals["bookCancelledOrders"].add(order_id)
         else:
             totals["omzet"] += order_total
             if is_final:
@@ -1394,6 +1425,12 @@ def compute_summary(filters=None):
             "cancelledOrders": cancelled_order_count,
             "bookOrders": book_order_count,
             "bookCancelledOrders": book_cancelled_order_count,
+            "cancelledPackages": totals["cancelledPackages"],
+            "returnPackages": totals["returnPackages"],
+            "cancelPackages": totals["cancelPackages"],
+            "bookCancelledPackages": totals["bookCancelledPackages"],
+            "bookReturnPackages": totals["bookReturnPackages"],
+            "bookCancelPackages": totals["bookCancelPackages"],
             "margin": margin,
             "finalMargin": final_margin,
             "estimatedMargin": estimated_margin,
