@@ -138,6 +138,12 @@ function syncFilterControls() {
   if (el("storeFilter")) el("storeFilter").value = state.pendingFilters.store || "all";
 }
 
+let filterApplyTimer = null;
+function scheduleApplyFilters(delay = 180) {
+  clearTimeout(filterApplyTimer);
+  filterApplyTimer = setTimeout(() => applyFilters().catch(err => showNotice(err.message)), delay);
+}
+
 async function applyFilters() {
   state.filters = { ...state.pendingFilters };
   const button = el("applyFilters");
@@ -668,15 +674,18 @@ document.querySelectorAll("[data-preset]").forEach(btn => btn.addEventListener("
     el("monthFilter").value = "";
   }
   syncFilterControls();
+  scheduleApplyFilters();
 }));
 el("monthFilter").addEventListener("change", (event) => {
   state.pendingFilters.month = event.target.value;
   state.pendingFilters.preset = state.pendingFilters.month ? "month" : "thisMonth";
   syncFilterControls();
+  scheduleApplyFilters();
 });
 el("storeFilter").addEventListener("change", (event) => {
   state.pendingFilters.store = event.target.value;
   syncFilterControls();
+  scheduleApplyFilters();
 });
 el("applyFilters").addEventListener("click", applyFilters);
 el("skuSort").addEventListener("change", (event) => {
@@ -726,7 +735,6 @@ document.getElementById("uploadForm").addEventListener("submit", async (event) =
       uploadResults = [await api("/api/upload", { method: "POST", body: fd })];
     }
     el("fileInput").value = "";
-    await refresh();
     setView("owner");
     const flatResults = uploadResults.flatMap(item => item && item.results ? item.results : [item]).filter(Boolean);
     const adRows = flatResults.reduce((sum, item) => sum + Number(item.adSpendRows || 0), 0);
