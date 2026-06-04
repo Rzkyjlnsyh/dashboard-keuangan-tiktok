@@ -80,6 +80,7 @@ function setView(view) {
     view === "tv" ? "Monitor Operasional" :
     view === "team" ? "Dashboard Tim" :
     view === "ops" ? "Upload & Otomatis" :
+    view === "quality" ? "Data Quality Center" :
     view === "sku" ? "Detail SKU" :
     view === "stores" ? "Dashboard Per Toko" :
     "Owner Dashboard";
@@ -87,6 +88,7 @@ function setView(view) {
     view === "tv" ? "Tampilan aman untuk tim: order, omset, status, dan SKU bergerak cepat." :
     view === "team" ? "Mode aman untuk tim: data operasional terlihat, profit dan biaya rahasia disembunyikan." :
     view === "ops" ? "Upload data terbaru, jalankan auto update folder, dan aktifkan laporan Telegram." :
+    view === "quality" ? "Deteksi SKU tanpa HPP, order belum cair, pencairan tidak matched, cancel/refund besar, dan data duplikat." :
     view === "sku" ? "Cari SKU yang benar-benar menghasilkan profit dan SKU yang perlu diperbaiki." :
     view === "stores" ? "Bandingkan performa ventura, giftyours, dan custombase dalam satu layar." :
     "Profit, dana tertahan, potongan, HPP, forecast, dan rekomendasi asisten.";
@@ -811,6 +813,129 @@ el("telegramTest").addEventListener("click", async () => {
     showNotice(err.message);
   }
 });
+
+// ===== Data Quality Center =====
+async function loadDataQuality() {
+  const params = new URLSearchParams();
+  params.set("preset", state.filters.preset);
+  if (state.filters.preset === "month" && state.filters.month) params.set("month", state.filters.month);
+  params.set("store", state.filters.store);
+  params.set("role", state.accessRole);
+  params.set("_", Date.now().toString());
+  const data = await api("/api/data-quality?" + params.toString());
+  renderDataQuality(data);
+}
+
+function renderDataQuality(data) {
+  const scoreEl = document.getElementById("qualityScore");
+  if (scoreEl) {
+    const skor = data.skorKualitas || 0;
+    let cls = "good";
+    if (skor < 50) cls = "waspada";
+    else if (skor < 75) cls = "sedang";
+    scoreEl.className = "quality-score " + cls;
+    scoreEl.textContent = "Skor: " + skor + "/100 · " + (data.statusKeseluruhan || "-").charAt(0).toUpperCase() + (data.statusKeseluruhan || "-").slice(1);
+  }
+
+  // Overview stats
+  const overview = document.getElementById("qualityOverview");
+  if (overview) {
+    const totalOrderSelesai = (data.orderTanpaPencairan || []).length + (data.pencairanTanpaOrder || []).length + (data.cancelRefundBesar || []).length;
+    overview.innerHTML = [
+      '<div class="quality-stat"><span>SKU Tanpa HPP</span><strong class="' + (data.skuTanpaHpp.length > 0 ? 'stat-bad' : 'stat-ok') + '">' + data.skuTanpaHpp.length.toLocaleString("id-ID") + '</strong></div>',
+      '<div class="quality-stat"><span>Order Selesai Belum Cair</span><strong class="' + (data.orderTanpaPencairan.length > 0 ? 'stat-bad' : 'stat-ok') + '">' + data.orderTanpaPencairan.length.toLocaleString("id-ID") + '</strong></div>',
+      '<div class="quality-stat"><span>Pencairan Tanpa Order</span><strong class="' + (data.pencairanTanpaOrder.length > 0 ? 'stat-warn' : 'stat-ok') + '">' + data.pencairanTanpaOrder.length.toLocaleString("id-ID") + '</strong></div>',
+      '<div class="quality-stat"><span>Cancel/Refund Besar</span><strong class="' + (data.cancelRefundBesar.filter(c => c.total >= 50000).length > 0 ? 'stat-bad' : 'stat-ok') + '">' + data.cancelRefundBesar.length.toLocaleString("id-ID") + '</strong></div>',
+      '<div class="quality-stat"><span>Data Duplikat</span><strong class="' + (data.dataDuplikat.length > 0 ? 'stat-warn' : 'stat-ok') + '">' + data.dataDuplikat.length.toLocaleString("id-ID") + '</strong></div>',
+    ].join("");
+  }
+
+  function fmtRp(n) { return "Rp" + Math.round(Number(n || 0)).toLocaleString("id-ID"); }
+
+  // Table helpers
+  function tableOrEmpty(tableId, rows, columns) {
+    const el = document.getElementById(tableId);
+    if (!el) return;
+    if (!rows || rows.length === 0) {
+      el.innerHTML = '<tbody><tr><td colspan="' + columns.length + '" style="text-align:center;padding:20px;color:#94a3b8;">Tidak ada masalah untuk kategori ini ✅</td></tr></tbody>';
+      return;
+    }
+    el.innerHTML = '<thead><tr>' + columns.map(c => '<th>' + c.header + '</th>').join("") + '</tr></thead><tbody>' +
+      rows.map(row => '<tr>' + columns.map(c => '<td>' + (c.fmt ? c.fmt(row[c.key]) : escapeHtml(String(row[c.key] || ""))) + '</td>').join("") + '</tr>').join("") +
+    '</tbody>';
+  }
+
+  // SKU Tanpa HPP
+  tableOrEmpty("qualitySkuTanpaHpp", data.skuTanpaHpp, [
+    { header: "SKU", key: "sku" },
+    { header: "Toko", key: "store" },
+    { header: "Produk", key: "product" },
+    { header: "Total Qty", key: "qtyTotal", fmt: n => Number(n || 0).toLocaleString("id-ID") },
+    { header: "Total Omset", key: "omzetTotal", fmt: fmtRp },
+  ]);
+
+  // Order Selesai Belum Cair
+  tableOrEmpty("qualityOrderBelumCair", data.orderTanpaPencairan, [
+    { header: "Order ID", key: "orderId" },
+    { header: "Toko", key: "store" },
+    { header: "SKU", key: "sku" },
+    { header: "Total", key: "total", fmt: fmtRp },
+    { header: "Dibuat", key: "created" },
+    { header: "Umur (hari)", key: "ageDays", fmt: n => String(n || 0) },
+  ]);
+
+  // Pencairan Tanpa Order
+  tableOrEmpty("qualitySettlementTanpaOrder", data.pencairanTanpaOrder, [
+    { header: "Order ID", key: "orderId" },
+    { header: "Toko", key: "store" },
+    { header: "SKU", key: "sku" },
+    { header: "Amount", key: "amount", fmt: fmtRp },
+    { header: "Sumber", key: "source" },
+  ]);
+
+  // Cancel/Refund Besar
+  tableOrEmpty("qualityCancelRefund", data.cancelRefundBesar, [
+    { header: "Order ID", key: "orderId" },
+    { header: "Toko", key: "store" },
+    { header: "SKU", key: "sku" },
+    { header: "Total", key: "total", fmt: fmtRp },
+    { header: "Status", key: "status" },
+    { header: "Dibuat", key: "created" },
+  ]);
+
+  // Data Duplikat
+  tableOrEmpty("qualityDuplikat", data.dataDuplikat, [
+    { header: "Line Key", key: "lineKey" },
+    { header: "Order ID", key: "orderId" },
+    { header: "Toko", key: "store" },
+    { header: "SKU", key: "sku" },
+    { header: "Jumlah Duplikat", key: "count", fmt: n => String(n || 0) },
+    { header: "Total Nilai", key: "totalValues", fmt: fmtRp },
+  ]);
+
+  // Saran
+  const saranEl = document.getElementById("qualitySaran");
+  if (saranEl) {
+    if (data.saran && data.saran.length > 0) {
+      saranEl.innerHTML = '<ul>' + data.saran.map(s => '<li>' + escapeHtml(s) + '</li>').join("") + '</ul>';
+    } else {
+      saranEl.innerHTML = '<p style="padding:14px;color:#94a3b8;">Data dalam kondisi baik, tidak ada saran perbaikan saat ini ✅</p>';
+    }
+  }
+}
+
+// Modify refresh to also load quality data if that view is active
+const origRefresh = refresh;
+refresh = async function() {
+  await origRefresh();
+  if (state.view === "quality") {
+    try {
+      await loadDataQuality();
+    } catch (err) {
+      showNotice(err.message);
+    }
+  }
+};
 
 syncFilterControls();
 setView(state.view);

@@ -504,3 +504,54 @@ body.team .hero-actions { display: none; }
   body.tv .kpis { grid-template-columns: 1fr; }
   body.tv h1 { font-size: 36px; }
 }
+
+/* ===== Data Quality Panel ===== */
+.quality-score {
+  font-size: 1.4rem;
+  font-weight: 700;
+  padding: 4px 14px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.quality-score.good { background: var(--green, #1a8f5e); color: #fff; }
+.quality-score.sedang { background: var(--yellow, #cc8b00); color: #fff; }
+.quality-score.waspada { background: var(--red, #c0392b); color: #fff; }
+.quality-score.tidak_tersedia { background: var(--gray, #555); color: #aaa; }
+
+.quality-overview {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px;
+}
+.quality-stat {
+  background: var(--card-bg, #1e293b);
+  border: 1px solid var(--border, #334155);
+  border-radius: 10px;
+  padding: 12px 18px;
+  min-width: 140px;
+  flex: 1;
+}
+.quality-stat span { display: block; font-size: 0.85rem; color: var(--text-dim, #94a3b8); margin-bottom: 4px; }
+.quality-stat strong { font-size: 1.3rem; display: block; }
+.quality-stat .stat-bad { color: #e74c3c; }
+.quality-stat .stat-ok { color: #2ecc71; }
+.quality-stat .stat-warn { color: #f39c12; }
+
+.quality-saran {
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.quality-saran li {
+  list-style: none;
+  padding: 8px 12px;
+  background: var(--card-bg, #1e293b);
+  border-left: 3px solid var(--accent, #3b82f6);
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: var(--text, #e2e8f0);
+}

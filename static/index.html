@@ -27,6 +27,7 @@
         <button data-view="sku" data-owner-only="true">Detail SKU</button>
         <button data-view="stores" data-owner-only="true">Per Toko</button>
         <button data-view="tv">TV Kantor</button>
+        <button data-view="quality" data-owner-only="true">Kualitas Data</button>
         <button data-view="ops" data-owner-only="true">Upload & Otomatis</button>
       </nav>
       <div class="sync-card">
@@ -199,6 +200,39 @@
         </div>
         <div id="skuInsight" class="sku-insight"></div>
         <div class="table-wrap detail-table"><table id="skuDetailTable"></table></div>
+      </section>
+
+      <section id="qualityPanel" class="grid quality-only" data-show="quality">
+        <article class="panel wide">
+          <div class="panel-head"><div><span>Data Quality Center</span><strong>Deteksi & Laporan Masalah Data</strong></div>
+            <span id="qualityScore" class="quality-score">Skor: -</span>
+          </div>
+          <div id="qualityOverview" class="quality-overview"></div>
+        </article>
+        <article class="panel quality-skus">
+          <div class="panel-head"><div><span>SKU</span><strong>Tanpa HPP / Packing</strong></div></div>
+          <div class="table-wrap"><table id="qualitySkuTanpaHpp"><tbody></tbody></table></div>
+        </article>
+        <article class="panel quality-orders">
+          <div class="panel-head"><div><span>Order</span><strong>Selesai Belum Cair</strong></div></div>
+          <div class="table-wrap"><table id="qualityOrderBelumCair"><tbody></tbody></table></div>
+        </article>
+        <article class="panel quality-settlements">
+          <div class="panel-head"><div><span>Settlement</span><strong>Pencairan Tanpa Order</strong></div></div>
+          <div class="table-wrap"><table id="qualitySettlementTanpaOrder"><tbody></tbody></table></div>
+        </article>
+        <article class="panel quality-cancels">
+          <div class="panel-head"><div><span>Cancel/Refund</span><strong>Nilai Besar</strong></div></div>
+          <div class="table-wrap"><table id="qualityCancelRefund"><tbody></tbody></table></div>
+        </article>
+        <article class="panel quality-duplicates">
+          <div class="panel-head"><div><span>Duplikasi</span><strong>Data Terduplikasi</strong></div></div>
+          <div class="table-wrap"><table id="qualityDuplikat"><tbody></tbody></table></div>
+        </article>
+        <article class="panel quality-suggestions">
+          <div class="panel-head"><div><span>Saran</span><strong>Rekomendasi Perbaikan</strong></div></div>
+          <div id="qualitySaran" class="quality-saran"></div>
+        </article>
       </section>
 
       <section id="uploadPanel" class="grid ops-only" data-show="ops">
