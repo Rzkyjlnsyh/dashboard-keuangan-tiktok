@@ -1,6 +1,7 @@
 {
   "dependencies": {
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "pg": "^8.13.0"
   },
   "scripts": {
     "build": "mkdir -p public/static && cp -R static/. public/static/ && cp static/index.html public/index.html",
