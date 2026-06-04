@@ -43,26 +43,27 @@ const MIME = {
 };
 
 function serveStatic(url, res) {
-  let filePath = path.join(STATIC_DIR, url === '/' ? 'index.html' : url);
+  // Strip /static/ prefix — files are directly in STATIC_DIR
+  const cleanUrl = url.startsWith('/static/') ? url.slice(7).replace(/^\//, '') : (url === '/' ? 'index.html' : url.slice(1));
+  let filePath = path.join(STATIC_DIR, cleanUrl);
   
   // Fallback untuk SPA: semua route selain /api/ serve index.html
-  if (!url.startsWith('/api/')) {
+  if (!url.startsWith('/api/') && !url.startsWith('/static/')) {
     if (!fs.existsSync(filePath)) {
       filePath = path.join(STATIC_DIR, 'index.html');
     }
-    const ext = path.extname(filePath);
-    const contentType = MIME[ext] || 'application/octet-stream';
-    
-    try {
-      const content = fs.readFileSync(filePath);
-      res.writeHead(200, { 'Content-Type': contentType });
-      res.end(content);
-      return true;
-    } catch {
-      return false;
-    }
   }
-  return false;
+  const ext = path.extname(filePath);
+  const contentType = MIME[ext] || 'application/octet-stream';
+  
+  try {
+    const content = fs.readFileSync(filePath);
+    res.writeHead(200, { 'Content-Type': contentType });
+    res.end(content);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 const server = http.createServer(async (req, res) => {
