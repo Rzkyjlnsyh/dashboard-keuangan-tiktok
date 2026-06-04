@@ -26,6 +26,7 @@
         <button data-view="team">Tim</button>
         <button data-view="sku" data-owner-only="true">Detail SKU</button>
         <button data-view="stores" data-owner-only="true">Per Toko</button>
+        <button data-view="accounting" data-owner-only="true">Akuntansi</button>
         <button data-view="tv">TV Kantor</button>
         <button data-view="ops" data-owner-only="true">Upload & Otomatis</button>
       </nav>
@@ -69,7 +70,7 @@
         </div>
       </header>
 
-      <section class="filters" data-show="owner,team,tv,sku,stores">
+      <section class="filters" data-show="owner,team,tv,sku,stores,accounting">
         <div>
           <span>Periode</span>
           <div class="segments">
@@ -157,6 +158,11 @@
         <div class="panel-head"><div><span>Dashboard Per Toko</span><strong>Perbandingan Semua Toko</strong></div></div>
         <div id="storeCards" class="store-cards"></div>
         <div class="table-wrap store-table"><table id="storeTable"></table></div>
+      </section>
+
+      <section id="accountingPanel" class="panel accounting-only secret" data-show="accounting">
+        <div class="panel-head"><div><span>Akuntansi</span><strong>Laporan Laba Rugi, Neraca & Arus Kas</strong></div></div>
+        <div id="accountingContent" class="accounting-content"></div>
       </section>
 
       <section class="grid" data-show="owner,team,tv">

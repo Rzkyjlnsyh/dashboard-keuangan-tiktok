@@ -82,6 +82,7 @@ function setView(view) {
     view === "ops" ? "Upload & Otomatis" :
     view === "sku" ? "Detail SKU" :
     view === "stores" ? "Dashboard Per Toko" :
+    view === "accounting" ? "Laporan Akuntansi" :
     "Owner Dashboard";
   el("pageSub").textContent =
     view === "tv" ? "Tampilan aman untuk tim: order, omset, status, dan SKU bergerak cepat." :
@@ -89,6 +90,7 @@ function setView(view) {
     view === "ops" ? "Upload data terbaru, jalankan auto update folder, dan aktifkan laporan Telegram." :
     view === "sku" ? "Cari SKU yang benar-benar menghasilkan profit dan SKU yang perlu diperbaiki." :
     view === "stores" ? "Bandingkan performa ventura, giftyours, dan custombase dalam satu layar." :
+    view === "accounting" ? "Laba rugi, neraca mini, arus kas, dan pajak per bulan per toko." :
     "Profit, dana tertahan, potongan, HPP, forecast, dan rekomendasi asisten.";
   el("trendTitle").textContent = state.accessRole !== "owner" ? "Omset 30 Hari" : "Omset & Profit 30 Hari";
   refresh().catch(err => alert(err.message));
@@ -162,6 +164,11 @@ async function applyFilters() {
 }
 
 async function refresh() {
+  if (state.view === "accounting") {
+    const accounting = await fetchAccounting();
+    renderAccounting(accounting);
+    return;
+  }
   const summary = await api(summaryUrl());
   state.summary = summary;
   render(summary);
@@ -511,6 +518,137 @@ function renderAdSpendRows(rows) {
       ${r.channel || "Iklan"}${r.campaign ? " · " + r.campaign : ""}<br>
       ${r.note || "Tidak ada catatan"}
     </div>`).join("") || "Belum ada biaya iklan.";
+}
+
+function accountingUrl() {
+  const params = new URLSearchParams();
+  params.set("preset", state.filters.preset === "all" ? "month" : state.filters.preset);
+  if (state.filters.preset === "month" && state.filters.month) params.set("month", state.filters.month);
+  else if (state.filters.preset === "thisMonth") {
+    const now = new Date();
+    params.set("month", `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`);
+  }
+  params.set("store", state.filters.store);
+  params.set("role", state.accessRole);
+  params.set("_", Date.now().toString());
+  return "/api/accounting?" + params.toString();
+}
+
+async function fetchAccounting() {
+  const data = await api(accountingUrl());
+  return data;
+}
+
+function renderAccounting(summary) {
+  const pl = summary.profitLoss || {};
+  const bs = summary.balanceSheet || {};
+  const cf = summary.cashFlow || {};
+  const tx = summary.tax || {};
+  const error = summary.error;
+
+  if (error) {
+    el("accountingContent").innerHTML = `<div class="alert warn"><strong>Perhatian</strong><div>${escapeHtml(error)}</div></div>`;
+    return;
+  }
+
+  const storeKeys = Object.keys(pl).filter(k => k !== "total");
+  const total = pl.total || {};
+
+  // ── Helper: build a store-column header ──
+  function storeHeaders() {
+    return storeKeys.map(s => `<th class="store-col">${escapeHtml(s)}</th>`).join("");
+  }
+  function storeRow(valueFn) {
+    return storeKeys.map(s => `<td class="store-col">${fmt(valueFn(pl[s] || {}))}</td>`).join("");
+  }
+
+  const html = `
+    <div class="accounting-grid">
+
+      <!-- Laba Rugi -->
+      <div class="accounting-table-wrap">
+        <h3 class="accounting-section-title">Laporan Laba Rugi</h3>
+        <table class="accounting-table">
+          <thead>
+            <tr>
+              <th>Uraian</th>
+              ${storeHeaders()}
+              <th>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><strong>Omzet (Net)</strong></td>${storeRow(s => s.omzet)}<td><strong>${fmt(total.omzet)}</strong></td></tr>
+            <tr><td>HPP</td>${storeRow(s => s.hpp)}<td>${fmt(total.hpp)}</td></tr>
+            <tr><td>Biaya Packing</td>${storeRow(s => s.packing)}<td>${fmt(total.packing)}</td></tr>
+            <tr><td>Laba Kotor</td>${storeRow(s => s.labaKotor)}<td><strong>${fmt(total.labaKotor)}</strong></td></tr>
+            <tr><td>Potongan Platform</td>${storeRow(s => s.platformFee)}<td>${fmt(total.platformFee)}</td></tr>
+            <tr><td>Biaya Iklan</td>${storeRow(s => s.adSpend)}<td>${fmt(total.adSpend)}</td></tr>
+            <tr class="total-row">
+              <td><strong>Laba Bersih</strong></td>
+              ${storeRow(s => s.labaBersih)}
+              <td><strong>${fmt(total.labaBersih)}</strong></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Neraca Mini -->
+      <div class="accounting-table-wrap">
+        <h3 class="accounting-section-title">Neraca Mini</h3>
+        <table class="accounting-table">
+          <tbody>
+            <tr><td><strong>Aset</strong></td><td></td></tr>
+            <tr><td>&nbsp;&nbsp;Kas (Pencairan)</td><td>${fmt(bs.kas)}</td></tr>
+            <tr><td>&nbsp;&nbsp;Piutang Dana Tertahan</td><td>${fmt(bs.piutangDanaTertahan)}</td></tr>
+            <tr><td>&nbsp;&nbsp;Persediaan (estimasi)</td><td>${fmt(bs.persediaan)}</td></tr>
+            <tr class="total-row"><td><strong>Total Aset</strong></td><td><strong>${fmt(bs.totalAset)}</strong></td></tr>
+            <tr><td><strong>Kewajiban & Ekuitas</strong></td><td></td></tr>
+            <tr><td>&nbsp;&nbsp;Utang Iklan</td><td>${fmt(bs.utangIklan)}</td></tr>
+            <tr class="total-row"><td><strong>Ekuitas</strong></td><td><strong>${fmt(bs.ekuitas)}</strong></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Arus Kas -->
+      <div class="accounting-table-wrap">
+        <h3 class="accounting-section-title">Arus Kas</h3>
+        <table class="accounting-table">
+          <tbody>
+            <tr><td><strong>Kas Masuk</strong></td><td></td></tr>
+            <tr><td>&nbsp;&nbsp;Pencairan Settlement</td><td>${fmt(cf.kasMasukPencairan)}</td></tr>
+            <tr><td><strong>Kas Keluar</strong></td><td></td></tr>
+            <tr><td>&nbsp;&nbsp;Pembayaran HPP</td><td>${fmt(cf.kasKeluarHpp)}</td></tr>
+            <tr><td>&nbsp;&nbsp;Biaya Packing</td><td>${fmt(cf.kasKeluarPacking)}</td></tr>
+            <tr><td>&nbsp;&nbsp;Biaya Iklan</td><td>${fmt(cf.kasKeluarIklan)}</td></tr>
+            <tr class="total-row">
+              <td><strong>Arus Kas Bersih</strong></td>
+              <td><strong>${fmt(cf.arusKasBersih)}</strong></td>
+            </tr>
+            <tr><td>Dana Tertahan Akhir</td><td>${fmt(cf.danaTertahanAkhir)}</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Pajak -->
+      <div class="accounting-table-wrap">
+        <h3 class="accounting-section-title">Pajak</h3>
+        <table class="accounting-table">
+          <tbody>
+            <tr><td><strong>PPh Final PP 23</strong></td><td></td></tr>
+            <tr><td>&nbsp;&nbsp;Omzet</td><td>${fmt(tx.pphFinalPP23?.omzet || 0)}</td></tr>
+            <tr><td>&nbsp;&nbsp;Tarif</td><td>${(Number(tx.pphFinalPP23?.tarif || 0) * 100).toFixed(1)}%</td></tr>
+            <tr class="total-row"><td>&nbsp;&nbsp;PPh Terutang</td><td><strong>${fmt(tx.pphFinalPP23?.pphTerutang || 0)}</strong></td></tr>
+            <tr><td><strong>PPN</strong></td><td></td></tr>
+            <tr><td>&nbsp;&nbsp;Omzet</td><td>${fmt(tx.ppn?.omzet || 0)}</td></tr>
+            <tr><td>&nbsp;&nbsp;Tarif</td><td>${(Number(tx.ppn?.tarif || 0) * 100).toFixed(1)}%</td></tr>
+            <tr class="total-row"><td>&nbsp;&nbsp;PPN Keluaran</td><td><strong>${fmt(tx.ppn?.ppnKeluaran || 0)}</strong></td></tr>
+          </tbody>
+        </table>
+        <p class="hint">Periode: ${summary.month || "-"} · Generated: ${summary.generatedAt || "-"}</p>
+      </div>
+    </div>
+  `;
+  el("accountingContent").innerHTML = html;
 }
 
 function drawTrend(rows = []) {
