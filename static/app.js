@@ -336,7 +336,7 @@ function renderAlerts(alerts) {
     <div class="alert ${a.level}">
       <strong>${a.title}</strong>
       <div>${a.body}</div>
-    </div>`).join("") : `<div class="alert"><strong>Kondisi normal</strong><div>Belum ada alert besar dari data terakhir.</div></div>`;
+    </div>`).join("");
 }
 
 function renderAssistant(assistant) {
