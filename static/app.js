@@ -182,12 +182,29 @@ async function refresh() {
   // Load per komponen — paralel biar cepat
   const params = summaryParams();
   const [mini, sku, daily] = await Promise.all([
-    api("/api/split-data?type=mini&" + params).catch(e => ({ totals: {} })),
+    api("/api/split-data?type=mini&" + params).then(r => (r && r.totals ? r : { ...r, totals: {} })).catch(e => ({ totals: {} })),
     api("/api/split-data?type=sku&" + params).catch(e => ({ topSku: [], weakSku: [] })),
     api("/api/split-data?type=daily&" + params).catch(e => ({ daily: [] })),
   ]);
   state.summary = mini;
-  render({ ...mini, topSku: sku.topSku || [], weakSku: sku.weakSku || [], daily: daily.daily || [] });
+  // Generate available months from summary response if it has them
+  var availStores = mini.availableStores || defaultStores;
+  var availMonths = mini.availableMonths || [];
+  if (!availMonths.length && mini.generatedAt) {
+    // Fallback: generate last 12 months from current date
+    var now = new Date();
+    for (var i = 0; i < 12; i++) {
+      var y = now.getFullYear();
+      var m = String(now.getMonth() + 1).padStart(2, "0");
+      availMonths.push(y + "-" + m);
+      now.setMonth(now.getMonth() - 1);
+    }
+  }
+  render({
+    ...mini, topSku: sku.topSku || [], weakSku: sku.weakSku || [], daily: daily.daily || [],
+    availableStores: availStores,
+    availableMonths: availMonths,
+  });
 }
   
 // Load Data Quality data in parallel
@@ -243,7 +260,7 @@ function populateMonths(months) {
 
 function render(summary) {
   if (!summary || !summary.totals) { summary = { totals: {}, alerts: [], status: [], operationStatus: [], operationDetails: [], topSku: [], weakSku: [], daily: [], stores: [], runs: [], auditEvents: [], adSpendRows: [], assistant: { score: 0, health: "Menunggu Data", forecast30Omzet: 0, insights: [], actions: [] }, availableStores: [], availableMonths: [] }; }
-  const t = summary.totals;
+  const t = summary.totals || {};
   const hasBook = Number(t.bookOrders || 0) > 0 || Number(t.bookOmzet || 0) > 0;
   const viewOrders = hasBook ? Number(t.bookOrders || 0) : Number(t.orders || 0);
   const viewGross = hasBook ? Number(t.bookGross || 0) : Number(t.gross || 0);
@@ -303,7 +320,8 @@ function render(summary) {
   renderRuns(summary.runs || []);
   renderAuditEvents(summary.auditEvents || []);
   renderAdSpendRows(summary.adSpendRows || []);
-  renderAssistant(summary.assistant);
+  var assistant = summary.assistant || buildAssistantFromTotals(t);
+  renderAssistant(assistant);
   renderStores(summary.stores || []);
   drawTrend(summary.daily || []);
   if (summary.availableStores) populateStores(summary.availableStores);
@@ -320,10 +338,44 @@ function renderAlerts(alerts) {
     <div class="alert ${a.level}">
       <strong>${a.title}</strong>
       <div>${a.body}</div>
-    </div>`).join("") : `<div class="alert"><strong>Kondisi normal</strong><div>Belum ada alert besar dari data terakhir.</div></div>`;
+    </div>`).join("");
+}
+
+function buildAssistantFromTotals(t) {
+  var hpp = Number(t.hpp || 0);
+  var packing = Number(t.packing || 0);
+  var adSpend = Number(t.adSpend || 0);
+  var totalBiaya = hpp + packing + adSpend;
+  var margin = Number(t.margin || 0);
+  var score = margin >= 80 ? 90 : margin >= 60 ? 75 : margin >= 40 ? 60 : margin >= 20 ? 45 : 30;
+  return {
+    score: score,
+    health: margin >= 60 ? "Sehat" : margin >= 30 ? "Waspada" : "Perlu Perhatian",
+    forecast30Omzet: Math.round(Number(t.omzet || 0)),
+    forecast30Profit: Math.round(Number(t.profit || 0)),
+    insights: ["Data dari split-data API — assistant AI belum tersedia."],
+    actions: ["Upload data HPP per SKU untuk perhitungan akurat.", "Input biaya iklan untuk profit bersih yang akurat."],
+    accounting: {
+      omzetKotor: Number(t.gross || 0),
+      diskonSeller: Number(t.sellerDiscount || 0),
+      omzetNet: Number(t.omzet || 0),
+      settlementCair: Number(t.settlement || 0),
+      potonganPlatform: Number(t.platformFee || 0),
+      hpp: hpp,
+      packing: packing,
+      biayaIklan: adSpend,
+      biayaIklanSettlement: Number(t.adSpendSettlement || t.settlementAdSpend || 0),
+      biayaIklanTopup: Number(t.adSpendTopup || 0),
+      totalBiaya: totalBiaya,
+      returCancel: Number(t.refund || 0),
+      danaTertahan: Number(t.held || 0),
+      profitBersih: Number(t.profit || 0)
+    }
+  };
 }
 
 function renderAssistant(assistant) {
+  if (!assistant) return;
   el("healthScore").textContent = `${assistant.score}/100`;
   el("heroScore").textContent = Math.round(Number(assistant.score || 0));
   el("heroHealth").textContent = assistant.health || "Menunggu Data";
@@ -1120,6 +1172,30 @@ function renderDataQuality(data) {
 syncFilterControls();
 setView(state.view);
 loadConfig().then(refresh).catch(err => alert(err.message));
+
+// Emergency filter populate — ensures dropdowns work even if render() didn't fill them
+setTimeout(function() {
+  var mf = document.getElementById("monthFilter");
+  var sf = document.getElementById("storeFilter");
+  if (mf && mf.options.length <= 1) {
+    var now = new Date();
+    var html = '<option value="">Semua bulan</option>';
+    for (var i = 0; i < 12; i++) {
+      var y = now.getFullYear();
+      var m = String(now.getMonth() + 1).padStart(2, "0");
+      html += '<option value="' + y + "-" + m + '">' + monthLabel(y + "-" + m) + "</option>";
+      now.setMonth(now.getMonth() - 1);
+    }
+    mf.innerHTML = html;
+    console.log("[hermes] Emergency filter populated");
+  }
+  if (sf && sf.options.length <= 1) {
+    sf.innerHTML = '<option value="all">Semua Toko</option>' +
+      defaultStores.map(function(s) { return '<option value="' + s + '">' + s + "</option>"; }).join("");
+    console.log("[hermes] Emergency stores populated");
+  }
+}, 3000);
+
 setInterval(async () => {
   await refresh();
   if (state.view === "ops") await loadConfig();
