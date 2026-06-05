@@ -242,6 +242,7 @@ function populateMonths(months) {
 }
 
 function render(summary) {
+  if (!summary || !summary.totals) { summary = { totals: {}, alerts: [], status: [], operationStatus: [], operationDetails: [], topSku: [], weakSku: [], daily: [], stores: [], runs: [], auditEvents: [], adSpendRows: [], assistant: { score: 0, health: "Menunggu Data", forecast30Omzet: 0, insights: [], actions: [] }, availableStores: [], availableMonths: [] }; }
   const t = summary.totals;
   const hasBook = Number(t.bookOrders || 0) > 0 || Number(t.bookOmzet || 0) > 0;
   const viewOrders = hasBook ? Number(t.bookOrders || 0) : Number(t.orders || 0);
