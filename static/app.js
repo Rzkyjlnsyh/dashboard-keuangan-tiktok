@@ -319,7 +319,8 @@ function render(summary) {
   renderRuns(summary.runs || []);
   renderAuditEvents(summary.auditEvents || []);
   renderAdSpendRows(summary.adSpendRows || []);
-  renderAssistant(summary.assistant);
+  var assistant = summary.assistant || buildAssistantFromTotals(t);
+  renderAssistant(assistant);
   renderStores(summary.stores || []);
   drawTrend(summary.daily || []);
   if (summary.availableStores) populateStores(summary.availableStores);
@@ -337,6 +338,39 @@ function renderAlerts(alerts) {
       <strong>${a.title}</strong>
       <div>${a.body}</div>
     </div>`).join("");
+}
+
+function buildAssistantFromTotals(t) {
+  var hpp = Number(t.hpp || 0);
+  var packing = Number(t.packing || 0);
+  var adSpend = Number(t.adSpend || 0);
+  var totalBiaya = hpp + packing + adSpend;
+  var margin = Number(t.margin || 0);
+  var score = margin >= 80 ? 90 : margin >= 60 ? 75 : margin >= 40 ? 60 : margin >= 20 ? 45 : 30;
+  return {
+    score: score,
+    health: margin >= 60 ? "Sehat" : margin >= 30 ? "Waspada" : "Perlu Perhatian",
+    forecast30Omzet: Math.round(Number(t.omzet || 0)),
+    forecast30Profit: Math.round(Number(t.profit || 0)),
+    insights: ["Data dari split-data API — assistant AI belum tersedia."],
+    actions: ["Upload data HPP per SKU untuk perhitungan akurat.", "Input biaya iklan untuk profit bersih yang akurat."],
+    accounting: {
+      omzetKotor: Number(t.gross || 0),
+      diskonSeller: Number(t.sellerDiscount || 0),
+      omzetNet: Number(t.omzet || 0),
+      settlementCair: Number(t.settlement || 0),
+      potonganPlatform: Number(t.platformFee || 0),
+      hpp: hpp,
+      packing: packing,
+      biayaIklan: adSpend,
+      biayaIklanSettlement: Number(t.adSpendSettlement || t.settlementAdSpend || 0),
+      biayaIklanTopup: Number(t.adSpendTopup || 0),
+      totalBiaya: totalBiaya,
+      returCancel: Number(t.refund || 0),
+      danaTertahan: Number(t.held || 0),
+      profitBersih: Number(t.profit || 0)
+    }
+  };
 }
 
 function renderAssistant(assistant) {
