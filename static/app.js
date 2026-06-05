@@ -1136,6 +1136,30 @@ function renderDataQuality(data) {
 syncFilterControls();
 setView(state.view);
 loadConfig().then(refresh).catch(err => alert(err.message));
+
+// Emergency filter populate — ensures dropdowns work even if render() didn't fill them
+setTimeout(function() {
+  var mf = document.getElementById("monthFilter");
+  var sf = document.getElementById("storeFilter");
+  if (mf && mf.options.length <= 1) {
+    var now = new Date();
+    var html = '<option value="">Semua bulan</option>';
+    for (var i = 0; i < 12; i++) {
+      var y = now.getFullYear();
+      var m = String(now.getMonth() + 1).padStart(2, "0");
+      html += '<option value="' + y + "-" + m + '">' + monthLabel(y + "-" + m) + "</option>";
+      now.setMonth(now.getMonth() - 1);
+    }
+    mf.innerHTML = html;
+    console.log("[hermes] Emergency filter populated");
+  }
+  if (sf && sf.options.length <= 1) {
+    sf.innerHTML = '<option value="all">Semua Toko</option>' +
+      defaultStores.map(function(s) { return '<option value="' + s + '">' + s + "</option>"; }).join("");
+    console.log("[hermes] Emergency stores populated");
+  }
+}, 3000);
+
 setInterval(async () => {
   await refresh();
   if (state.view === "ops") await loadConfig();
