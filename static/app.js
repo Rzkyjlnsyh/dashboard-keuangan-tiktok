@@ -187,7 +187,24 @@ async function refresh() {
     api("/api/split-data?type=daily&" + params).catch(e => ({ daily: [] })),
   ]);
   state.summary = mini;
-  render({ ...mini, topSku: sku.topSku || [], weakSku: sku.weakSku || [], daily: daily.daily || [] });
+  // Generate available months from summary response if it has them
+  var availStores = mini.availableStores || defaultStores;
+  var availMonths = mini.availableMonths || [];
+  if (!availMonths.length && mini.generatedAt) {
+    // Fallback: generate last 12 months from current date
+    var now = new Date();
+    for (var i = 0; i < 12; i++) {
+      var y = now.getFullYear();
+      var m = String(now.getMonth() + 1).padStart(2, "0");
+      availMonths.push(y + "-" + m);
+      now.setMonth(now.getMonth() - 1);
+    }
+  }
+  render({
+    ...mini, topSku: sku.topSku || [], weakSku: sku.weakSku || [], daily: daily.daily || [],
+    availableStores: availStores,
+    availableMonths: availMonths,
+  });
 }
   
 // Load Data Quality data in parallel
