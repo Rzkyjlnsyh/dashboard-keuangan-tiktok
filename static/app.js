@@ -182,9 +182,9 @@ async function refresh() {
   // Load per komponen — paralel biar cepat
   const params = summaryParams();
   const [mini, sku, daily] = await Promise.all([
-    api("/api/summary-mini?" + params).catch(e => ({ totals: {} })),
-    api("/api/sku-summary?" + params).catch(e => ({ topSku: [], weakSku: [] })),
-    api("/api/daily-trend?" + params).catch(e => ({ daily: [] })),
+    api("/api/split-data?type=mini&" + params).catch(e => ({ totals: {} })),
+    api("/api/split-data?type=sku&" + params).catch(e => ({ topSku: [], weakSku: [] })),
+    api("/api/split-data?type=daily&" + params).catch(e => ({ daily: [] })),
   ]);
   state.summary = mini;
   render({ ...mini, topSku: sku.topSku || [], weakSku: sku.weakSku || [], daily: daily.daily || [] });

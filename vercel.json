@@ -28,18 +28,6 @@
     {
       "source": "/api/accounting",
       "destination": "/api/accounting"
-    },
-    {
-      "source": "/api/summary-mini",
-      "destination": "/api/summary-mini"
-    },
-    {
-      "source": "/api/sku-summary",
-      "destination": "/api/sku-summary"
-    },
-    {
-      "source": "/api/daily-trend",
-      "destination": "/api/daily-trend"
     }
   ]
 }
