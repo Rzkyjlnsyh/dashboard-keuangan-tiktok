@@ -17,7 +17,7 @@ const apiFiles = [
   'config', 'summary', 'upload', 'ad-spend', 'accounting',
   'data-quality',
   'telegram-daily', 'telegram-test', 'import-samples',
-  'folder-monitor', 'folder-run',
+  'folder-monitor', 'folder-run', 'split-data',
 ];
 
 for (const name of apiFiles) {
