@@ -14,7 +14,8 @@ const STATIC_DIR = path.join(ROOT, 'static');
 // Load API handlers
 const handlers = {};
 const apiFiles = [
-  'config', 'summary', 'upload', 'ad-spend',
+  'config', 'summary', 'upload', 'ad-spend', 'accounting',
+  'data-quality',
   'telegram-daily', 'telegram-test', 'import-samples',
   'folder-monitor', 'folder-run',
 ];

@@ -1009,10 +1009,8 @@ function renderDataQuality(data) {
     scoreEl.textContent = "Skor: " + skor + "/100 · " + (data.statusKeseluruhan || "-").charAt(0).toUpperCase() + (data.statusKeseluruhan || "-").slice(1);
   }
 
-  // Overview stats
   const overview = document.getElementById("qualityOverview");
   if (overview) {
-    const totalOrderSelesai = (data.orderTanpaPencairan || []).length + (data.pencairanTanpaOrder || []).length + (data.cancelRefundBesar || []).length;
     overview.innerHTML = [
       '<div class="quality-stat"><span>SKU Tanpa HPP</span><strong class="' + (data.skuTanpaHpp.length > 0 ? 'stat-bad' : 'stat-ok') + '">' + data.skuTanpaHpp.length.toLocaleString("id-ID") + '</strong></div>',
       '<div class="quality-stat"><span>Order Selesai Belum Cair</span><strong class="' + (data.orderTanpaPencairan.length > 0 ? 'stat-bad' : 'stat-ok') + '">' + data.orderTanpaPencairan.length.toLocaleString("id-ID") + '</strong></div>',
@@ -1024,79 +1022,106 @@ function renderDataQuality(data) {
 
   function fmtRp(n) { return "Rp" + Math.round(Number(n || 0)).toLocaleString("id-ID"); }
 
-  // Table helpers
-  function tableOrEmpty(tableId, rows, columns) {
-    const el = document.getElementById(tableId);
+  // Paginated table with "Load More"
+  const PAGE_SIZE = 25;
+  const paginators = {};
+  function initP(tid, rows) { if (!paginators[tid]) paginators[tid] = { offset: 0, rows: rows || [] }; }
+  
+  function renderTable(tid, cols) {
+    const el = document.getElementById(tid);
     if (!el) return;
-    if (!rows || rows.length === 0) {
-      el.innerHTML = '<tbody><tr><td colspan="' + columns.length + '" style="text-align:center;padding:20px;color:#94a3b8;">Tidak ada masalah untuk kategori ini ✅</td></tr></tbody>';
+    const p = paginators[tid];
+    if (!p || !p.rows || p.rows.length === 0) {
+      el.innerHTML = '<tbody><tr><td colspan="' + cols.length + '" style="text-align:center;padding:20px;color:#94a3b8;">Tidak ada masalah untuk kategori ini ✅</td></tr></tbody>';
       return;
     }
-    el.innerHTML = '<thead><tr>' + columns.map(c => '<th>' + c.header + '</th>').join("") + '</tr></thead><tbody>' +
-      rows.map(row => '<tr>' + columns.map(c => '<td>' + (c.fmt ? c.fmt(row[c.key]) : escapeHtml(String(row[c.key] || ""))) + '</td>').join("") + '</tr>').join("") +
-    '</tbody>';
+    const chunk = p.rows.slice(0, p.offset + PAGE_SIZE);
+    const hasMore = p.offset + PAGE_SIZE < p.rows.length;
+    const head = '<thead><tr>' + cols.map(c => '<th>' + c.header + '</th>').join("") + '</tr></thead>';
+    const body = chunk.map(r => '<tr>' + cols.map(c => '<td>' + (c.fmt ? c.fmt(r[c.key]) : escapeHtml(String(r[c.key] || ""))) + '</td>').join("") + '</tr>').join("");
+    let foot = "";
+    if (hasMore) {
+      const rem = p.rows.length - (p.offset + PAGE_SIZE);
+      foot = '<tr><td colspan="' + cols.length + '" style="text-align:center;padding:10px;"><button class="qlm" data-t="' + tid + '" style="background:#3b82f6;color:#fff;border:none;border-radius:6px;padding:7px 20px;cursor:pointer;font-size:0.85rem;">Tampilkan lebih banyak (+' + Math.min(PAGE_SIZE, rem) + " dari " + rem + ")</button></td></tr>";
+    }
+    el.innerHTML = head + '<tbody>' + body + foot + '</tbody>';
   }
 
-  // SKU Tanpa HPP
-  tableOrEmpty("qualitySkuTanpaHpp", data.skuTanpaHpp, [
-    { header: "SKU", key: "sku" },
-    { header: "Toko", key: "store" },
-    { header: "Produk", key: "product" },
-    { header: "Total Qty", key: "qtyTotal", fmt: n => Number(n || 0).toLocaleString("id-ID") },
-    { header: "Total Omset", key: "omzetTotal", fmt: fmtRp },
-  ]);
+  // Bind load-more clicks
+  setTimeout(function() {
+    document.querySelectorAll(".qlm").forEach(function(b) {
+      b.addEventListener("click", function() {
+        var t = this.dataset.t;
+        if (paginators[t]) {
+          paginators[t].offset += PAGE_SIZE;
+          renderTable(t, tableCols[t]);
+        }
+        this.remove();
+      });
+    });
+  }, 50);
 
-  // Order Selesai Belum Cair
-  tableOrEmpty("qualityOrderBelumCair", data.orderTanpaPencairan, [
-    { header: "Order ID", key: "orderId" },
-    { header: "Toko", key: "store" },
-    { header: "SKU", key: "sku" },
-    { header: "Total", key: "total", fmt: fmtRp },
-    { header: "Dibuat", key: "created" },
-    { header: "Umur (hari)", key: "ageDays", fmt: n => String(n || 0) },
-  ]);
+  var tableCols = {
+    qualitySkuTanpaHpp: [
+      { header: "SKU", key: "sku" }, { header: "Toko", key: "store" },
+      { header: "Produk", key: "product" },
+      { header: "Qty", key: "qtyTotal", fmt: function(n) { return Number(n || 0).toLocaleString("id-ID"); } },
+      { header: "Omset", key: "omzetTotal", fmt: fmtRp },
+    ],
+    qualityOrderBelumCair: [
+      { header: "Order ID", key: "orderId" }, { header: "Toko", key: "store" },
+      { header: "SKU", key: "sku" }, { header: "Total", key: "total", fmt: fmtRp },
+      { header: "Dibuat", key: "created" }, { header: "Umur", key: "ageDays", fmt: function(n) { return String(n || 0) + " hr"; } },
+    ],
+    qualitySettlementTanpaOrder: [
+      { header: "Order ID", key: "orderId" }, { header: "Toko", key: "store" },
+      { header: "SKU", key: "sku" }, { header: "Amount", key: "amount", fmt: fmtRp },
+      { header: "Sumber", key: "source" },
+    ],
+    qualityCancelRefund: [
+      { header: "Order ID", key: "orderId" }, { header: "Toko", key: "store" },
+      { header: "SKU", key: "sku" }, { header: "Total", key: "total", fmt: fmtRp },
+      { header: "Status", key: "status" }, { header: "Dibuat", key: "created" },
+    ],
+    qualityDuplikat: [
+      { header: "Line Key", key: "lineKey" }, { header: "Order ID", key: "orderId" },
+      { header: "Toko", key: "store" }, { header: "SKU", key: "sku" },
+      { header: "Duplikat", key: "count", fmt: function(n) { return String(n || 0) + "x"; } },
+      { header: "Nilai Total", key: "totalValues", fmt: fmtRp },
+    ],
+  };
 
-  // Pencairan Tanpa Order
-  tableOrEmpty("qualitySettlementTanpaOrder", data.pencairanTanpaOrder, [
-    { header: "Order ID", key: "orderId" },
-    { header: "Toko", key: "store" },
-    { header: "SKU", key: "sku" },
-    { header: "Amount", key: "amount", fmt: fmtRp },
-    { header: "Sumber", key: "source" },
-  ]);
+  for (var tid in tableCols) {
+    var dk = tid === "qualitySkuTanpaHpp" ? "skuTanpaHpp"
+      : tid === "qualityOrderBelumCair" ? "orderTanpaPencairan"
+      : tid === "qualitySettlementTanpaOrder" ? "pencairanTanpaOrder"
+      : tid === "qualityCancelRefund" ? "cancelRefundBesar"
+      : "dataDuplikat";
+    initP(tid, data[dk] || []);
+    renderTable(tid, tableCols[tid]);
+  }
 
-  // Cancel/Refund Besar
-  tableOrEmpty("qualityCancelRefund", data.cancelRefundBesar, [
-    { header: "Order ID", key: "orderId" },
-    { header: "Toko", key: "store" },
-    { header: "SKU", key: "sku" },
-    { header: "Total", key: "total", fmt: fmtRp },
-    { header: "Status", key: "status" },
-    { header: "Dibuat", key: "created" },
-  ]);
-
-  // Data Duplikat
-  tableOrEmpty("qualityDuplikat", data.dataDuplikat, [
-    { header: "Line Key", key: "lineKey" },
-    { header: "Order ID", key: "orderId" },
-    { header: "Toko", key: "store" },
-    { header: "SKU", key: "sku" },
-    { header: "Jumlah Duplikat", key: "count", fmt: n => String(n || 0) },
-    { header: "Total Nilai", key: "totalValues", fmt: fmtRp },
-  ]);
-
-  // Saran
   const saranEl = document.getElementById("qualitySaran");
   if (saranEl) {
     if (data.saran && data.saran.length > 0) {
-      saranEl.innerHTML = '<ul>' + data.saran.map(s => '<li>' + escapeHtml(s) + '</li>').join("") + '</ul>';
+      saranEl.innerHTML = '<ul>' + data.saran.map(function(s) { return "<li>" + escapeHtml(s) + "</li>"; }).join("") + "</ul>";
     } else {
       saranEl.innerHTML = '<p style="padding:14px;color:#94a3b8;">Data dalam kondisi baik, tidak ada saran perbaikan saat ini ✅</p>';
     }
   }
 }
-
-// Quality data loaded inside refresh() now
+// Modify refresh to also load quality data if that view is active
+const origRefresh = refresh;
+refresh = async function() {
+  await origRefresh();
+  if (state.view === "quality") {
+    try {
+      await loadDataQuality();
+    } catch (err) {
+      showNotice(err.message);
+    }
+  }
+};
 
 // Inject skeleton loading CSS
 (function() {
