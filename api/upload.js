@@ -1,3 +1,4 @@
+const pg = require("../lib/pg-connector");
 const { json, readJson, importRows, requireOwner, safeLog } = require("../lib/finance-cloud");
 
 module.exports = async function handler(req, res) {
@@ -23,6 +24,7 @@ module.exports = async function handler(req, res) {
         results.push(result);
       }
       safeLog("upload_multipart_done", { files: payload.files.length, store: payload.fields.storeName, results: results.map(item => ({ kind: item.kind, rows: item.rows, updated: item.updated, adSpendRows: item.adSpendRows, adSpendTotal: item.adSpendTotal })) });
+      pg.cacheDelete("split:%").catch(()=>{});
       return json(res, 200, { ok: true, results });
     }
     const body = await readJson(req);
@@ -36,6 +38,7 @@ module.exports = async function handler(req, res) {
       rows: body.rows,
     });
     safeLog("upload_json_done", { filename: body.filename, store: body.storeName, kind: result.kind, rows: result.rows, updated: result.updated, adSpendRows: result.adSpendRows, adSpendTotal: result.adSpendTotal });
+    pg.cacheDelete("split:%").catch(()=>{});
     return json(res, 200, result);
   } catch (error) {
     safeLog("upload_error", { message: error.message, stack: String(error.stack || "").split("\n").slice(0, 4).join(" | ") });
