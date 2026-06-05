@@ -188,13 +188,6 @@ async function refresh() {
   ]);
   state.summary = mini;
   render({ ...mini, topSku: sku.topSku || [], weakSku: sku.weakSku || [], daily: daily.daily || [] });
-  try {
-    const summary = await api(summaryUrl());
-    state.summary = summary;
-    render(summary);
-  } catch (err) {
-    showNotice("Memuat data utama: " + err.message);
-  }
 }
   
 // Load Data Quality data in parallel
@@ -1111,17 +1104,7 @@ function renderDataQuality(data) {
   }
 }
 // Modify refresh to also load quality data if that view is active
-const origRefresh = refresh;
-refresh = async function() {
-  await origRefresh();
-  if (state.view === "quality") {
-    try {
-      await loadDataQuality();
-    } catch (err) {
-      showNotice(err.message);
-    }
-  }
-};
+// refresh() handles quality view inline
 
 // Inject skeleton loading CSS
 (function() {
