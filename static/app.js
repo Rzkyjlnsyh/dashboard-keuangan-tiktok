@@ -182,7 +182,7 @@ async function refresh() {
   // Load per komponen — paralel biar cepat
   const params = summaryParams();
   const [mini, sku, daily] = await Promise.all([
-    api("/api/split-data?type=mini&" + params).catch(e => ({ totals: {} })),
+    api("/api/split-data?type=mini&" + params).then(r => (r && r.totals ? r : { ...r, totals: {} })).catch(e => ({ totals: {} })),
     api("/api/split-data?type=sku&" + params).catch(e => ({ topSku: [], weakSku: [] })),
     api("/api/split-data?type=daily&" + params).catch(e => ({ daily: [] })),
   ]);
@@ -259,7 +259,7 @@ function populateMonths(months) {
 }
 
 function render(summary) {
-  const t = summary.totals;
+  const t = summary.totals || {};
   const hasBook = Number(t.bookOrders || 0) > 0 || Number(t.bookOmzet || 0) > 0;
   const viewOrders = hasBook ? Number(t.bookOrders || 0) : Number(t.orders || 0);
   const viewGross = hasBook ? Number(t.bookGross || 0) : Number(t.gross || 0);
