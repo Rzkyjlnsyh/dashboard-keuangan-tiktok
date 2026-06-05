@@ -340,6 +340,7 @@ function renderAlerts(alerts) {
 }
 
 function renderAssistant(assistant) {
+  if (!assistant) return;
   el("healthScore").textContent = `${assistant.score}/100`;
   el("heroScore").textContent = Math.round(Number(assistant.score || 0));
   el("heroHealth").textContent = assistant.health || "Menunggu Data";
