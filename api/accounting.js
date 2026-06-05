@@ -1,18 +1,8 @@
-const { Pool } = require("pg");
+const pg = require("../lib/pg-connector");
 
 const { json, buildFilters, requireOwner, nowIso, normalizeStore } = require("../lib/finance-cloud");
 
 const DEFAULT_STORES = ["ventura", "giftyours", "custombase"];
-
-function pool() {
-  const connectionString =
-    process.env.DATABASE_URL ||
-    process.env.POSTGRES_URL ||
-    process.env.SUPABASE_DB_URL ||
-    "";
-  if (!connectionString) return null;
-  return new Pool({ connectionString, max: 3, idleTimeoutMillis: 5000 });
-}
 
 /**
  * Compute accounting report for a given month and store filter:
@@ -22,8 +12,7 @@ function pool() {
  * - Tax calculation
  */
 async function computeAccounting(filters) {
-  const db = pool();
-  if (!db) {
+  if (!pg.pgConfigured()) {
     return emptyAccounting("Database PostgreSQL belum terkonfigurasi. Isi DATABASE_URL atau SUPABASE_DB_URL.");
   }
 
@@ -57,11 +46,11 @@ async function computeAccounting(filters) {
       orderSql += ` AND store_name = $3`;
       orderParams.push(storeFilter);
     }
-    const orderResult = await db.query(orderSql, orderParams);
+    const orderResult = await pg.pgQuery(orderSql, orderParams);
     const orderLines = orderResult.rows;
 
     // ── 2. SKU costs ──
-    const skuResult = await db.query("SELECT store_name, sku, hpp_per_unit, packing_per_unit FROM finance_sku_costs");
+    const skuResult = await pg.pgQuery("SELECT store_name, sku, hpp_per_unit, packing_per_unit FROM finance_sku_costs");
     const costsByKey = new Map();
     for (const row of skuResult.rows) {
       costsByKey.set(`${String(row.store_name || "").toLowerCase()}|${String(row.sku || "").toLowerCase()}`, row);
@@ -79,7 +68,7 @@ async function computeAccounting(filters) {
       adSql += ` AND store_name = $3`;
       adParams.push(storeFilter);
     }
-    const adResult = await db.query(adSql, adParams);
+    const adResult = await pg.pgQuery(adSql, adParams);
     const adRows = adResult.rows;
 
     // ── Process by store ──
@@ -206,7 +195,7 @@ async function computeAccounting(filters) {
       utangIklanSql += ` AND store_name = $3`;
       utangIklanParams.push(storeFilter);
     }
-    const utangResult = await db.query(utangIklanSql, [startDate, endDate, ...(storeFilter ? [storeFilter] : [])]);
+    const utangResult = await pg.pgQuery(utangIklanSql, [startDate, endDate, ...(storeFilter ? [storeFilter] : [])]);
     const utangIklanTotal = Math.round(Number(utangResult.rows[0]?.total || 0));
 
     // Kas: total settlement received for the period (simplified)
@@ -221,7 +210,7 @@ async function computeAccounting(filters) {
       kasSql += ` AND store_name = $3`;
       kasParams.push(storeFilter);
     }
-    const kasResult = await db.query(kasSql, kasParams);
+    const kasResult = await pg.pgQuery(kasSql, kasParams);
     const kasTotal = Math.round(Number(kasResult.rows[0]?.total || 0));
 
     // Dana tertahan: completed orders without settlement
@@ -245,7 +234,7 @@ async function computeAccounting(filters) {
     }
     // Only count non-cancelled orders
     heldSql = heldSql.replace("WHERE", "WHERE NOT " + buildCancelledCondition() + " AND");
-    const heldResult = await db.query(heldSql, heldParams);
+    const heldResult = await pg.pgQuery(heldSql, heldParams);
     const piutangDanaTertahan = Math.round(Number(heldResult.rows[0]?.dana_tertahan || 0));
 
     // Persediaan: simplified — assume inventory value from HPP of goods sold (proxy)
@@ -281,7 +270,7 @@ async function computeAccounting(filters) {
         ON LOWER(sk.store_name || '|' || sk.sku) = LOWER(q.store_name || '|' || q.sku)
         OR LOWER('global|' || sk.sku) = LOWER(q.store_name || '|' || q.sku)
     `;
-    const hppPaidResult = await db.query(hppPaidSql, hppParams);
+    const hppPaidResult = await pg.pgQuery(hppPaidSql, hppParams);
     const kasKeluarHppTotal = Math.round(Number(hppPaidResult.rows[0]?.hpp_paid || 0));
     const kasKeluarPackingTotal = Math.round(Number(hppPaidResult.rows[0]?.packing_paid || 0));
 
@@ -296,7 +285,7 @@ async function computeAccounting(filters) {
       adPaidSql += ` AND store_name = $3`;
       adPaidParams.push(storeFilter);
     }
-    const adPaidResult = await db.query(adPaidSql, adPaidParams);
+    const adPaidResult = await pg.pgQuery(adPaidSql, adPaidParams);
     const kasKeluarIklanTotal = Math.round(Number(adPaidResult.rows[0]?.total || 0));
 
     const arusKasBersih = kasTotal - kasKeluarHppTotal - kasKeluarPackingTotal - kasKeluarIklanTotal;
@@ -341,8 +330,6 @@ async function computeAccounting(filters) {
     };
   } catch (error) {
     return emptyAccounting(error.message);
-  } finally {
-    await db.end().catch(() => {});
   }
 }
 
