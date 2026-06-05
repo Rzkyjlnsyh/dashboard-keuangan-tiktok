@@ -294,17 +294,17 @@ function render(summary) {
   if (bookProfitEl) bookProfitEl.textContent = fmtCompact(viewProfit);
   const bookProfitMetaEl = document.getElementById("bookProfitMeta");
   if (bookProfitMetaEl) bookProfitMetaEl.textContent = `${pct(viewMargin)} margin`;
-  renderAlerts(summary.alerts);
-  renderStatus(summary.status, summary.operationStatus || [], summary.operationDetails || []);
+  renderAlerts(summary.alerts || []);
+  renderStatus(summary.status || [], summary.operationStatus || [], summary.operationDetails || []);
   renderTable("topSku", summary.topSku);
   renderTable("weakSku", summary.weakSku);
   renderSkuDetail(summary);
-  renderRuns(summary.runs);
+  renderRuns(summary.runs || []);
   renderAuditEvents(summary.auditEvents || []);
   renderAdSpendRows(summary.adSpendRows || []);
   renderAssistant(summary.assistant);
-  renderStores(summary.stores);
-  drawTrend(summary.daily);
+  renderStores(summary.stores || []);
+  drawTrend(summary.daily || []);
   if (summary.availableStores) populateStores(summary.availableStores);
   if (summary.availableMonths) populateMonths(summary.availableMonths);
   
@@ -314,7 +314,8 @@ function render(summary) {
 }
 
 function renderAlerts(alerts) {
-  el("alerts").innerHTML = alerts.length ? alerts.map(a => `
+  if (!alerts || !alerts.length) { el("alerts").innerHTML = `<div class="alert"><strong>Kondisi normal</strong><div>Belum ada alert besar dari data terakhir.</div></div>`; return; }
+  el("alerts").innerHTML = alerts.map(a => `
     <div class="alert ${a.level}">
       <strong>${a.title}</strong>
       <div>${a.body}</div>
