@@ -3,13 +3,43 @@
   "buildCommand": "npm run build",
   "outputDirectory": "public",
   "crons": [
-    { "path": "/api/telegram-daily", "schedule": "30 0 * * *" }
+    {
+      "path": "/api/telegram-daily",
+      "schedule": "30 0 * * *"
+    }
   ],
   "rewrites": [
-    { "source": "/", "destination": "/static/index.html" },
-    { "source": "/owner", "destination": "/static/index.html" },
-    { "source": "/team", "destination": "/static/index.html" },
-    { "source": "/tv", "destination": "/static/index.html" },
-    { "source": "/api/accounting", "destination": "/api/accounting" }
+    {
+      "source": "/",
+      "destination": "/static/index.html"
+    },
+    {
+      "source": "/owner",
+      "destination": "/static/index.html"
+    },
+    {
+      "source": "/team",
+      "destination": "/static/index.html"
+    },
+    {
+      "source": "/tv",
+      "destination": "/static/index.html"
+    },
+    {
+      "source": "/api/accounting",
+      "destination": "/api/accounting"
+    },
+    {
+      "source": "/api/summary-mini",
+      "destination": "/api/summary-mini"
+    },
+    {
+      "source": "/api/sku-summary",
+      "destination": "/api/sku-summary"
+    },
+    {
+      "source": "/api/daily-trend",
+      "destination": "/api/daily-trend"
+    }
   ]
 }

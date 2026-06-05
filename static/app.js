@@ -124,14 +124,18 @@ async function api(path, options, retryOwnerPin = true) {
   return data;
 }
 
-function summaryUrl() {
+function summaryParams() {
   const params = new URLSearchParams();
   params.set("preset", state.filters.preset);
   if (state.filters.preset === "month" && state.filters.month) params.set("month", state.filters.month);
   params.set("store", state.filters.store);
   params.set("role", state.accessRole);
   params.set("_", Date.now().toString());
-  return "/api/summary?" + params.toString();
+  return params.toString();
+}
+
+function summaryUrl() {
+  return "/api/summary?" + summaryParams();
 }
 
 function syncFilterControls() {
@@ -171,9 +175,19 @@ async function refresh() {
     renderAccounting(accounting);
     return;
   }
-  const summary = await api(summaryUrl());
-  state.summary = summary;
-  render(summary);
+  if (state.view === "quality") {
+    await loadDataQuality();
+    return;
+  }
+  // Load per komponen — paralel biar cepat
+  const params = summaryParams();
+  const [mini, sku, daily] = await Promise.all([
+    api("/api/summary-mini?" + params).catch(e => ({ totals: {} })),
+    api("/api/sku-summary?" + params).catch(e => ({ topSku: [], weakSku: [] })),
+    api("/api/daily-trend?" + params).catch(e => ({ daily: [] })),
+  ]);
+  state.summary = mini;
+  render({ ...mini, topSku: sku.topSku || [], weakSku: sku.weakSku || [], daily: daily.daily || [] });
 }
 
 function populateStores(stores) {
@@ -1062,18 +1076,7 @@ function renderDataQuality(data) {
   }
 }
 
-// Modify refresh to also load quality data if that view is active
-const origRefresh = refresh;
-refresh = async function() {
-  await origRefresh();
-  if (state.view === "quality") {
-    try {
-      await loadDataQuality();
-    } catch (err) {
-      showNotice(err.message);
-    }
-  }
-};
+// Quality data loaded inside refresh() now
 
 syncFilterControls();
 setView(state.view);
