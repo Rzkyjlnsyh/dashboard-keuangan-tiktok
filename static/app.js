@@ -171,9 +171,28 @@ async function refresh() {
     renderAccounting(accounting);
     return;
   }
-  const summary = await api(summaryUrl());
-  state.summary = summary;
-  render(summary);
+  if (state.view === "quality") {
+    await loadSummary();
+  }
+  
+  // Phase 1: Quick load — only render KPI + summary data first
+  // This lets the user see numbers immediately while heavy tables/charts load
+  try {
+    const summary = await api(summaryUrl());
+    state.summary = summary;
+    render(summary);
+  } catch (err) {
+    showNotice("Memuat data utama: " + err.message);
+  }
+}
+  
+// Load Data Quality data in parallel
+async function loadSummary() {
+  try {
+    await loadDataQuality();
+  } catch (err) {
+    // quality data is secondary, don't block
+  }
 }
 
 function populateStores(stores) {
@@ -284,6 +303,10 @@ function render(summary) {
   drawTrend(summary.daily);
   if (summary.availableStores) populateStores(summary.availableStores);
   if (summary.availableMonths) populateMonths(summary.availableMonths);
+  
+  // Show generated time in quality panel too
+  const qualityGen = document.getElementById("qualityGenTime");
+  if (qualityGen) qualityGen.textContent = summary.generatedAt || "-";
 }
 
 function renderAlerts(alerts) {
@@ -1074,6 +1097,15 @@ refresh = async function() {
     }
   }
 };
+
+// Inject skeleton loading CSS
+(function() {
+  if (document.getElementById("hermes-skeleton-css")) return;
+  const style = document.createElement("style");
+  style.id = "hermes-skeleton-css";
+  style.textContent = ".skeleton{background:linear-gradient(90deg,var(--card-bg,#1e293b) 25%,var(--border,#334155) 50%,var(--card-bg,#1e293b) 75%);background-size:200% 100%;animation:skeleton-pulse 1.5s ease-in-out infinite;border-radius:8px;min-height:20px}.skeleton-card{min-height:80px;margin:8px 0}@keyframes skeleton-pulse{0%{background-position:200% 0}100%{background-position:-200% 0}}";
+  document.head.appendChild(style);
+})();
 
 syncFilterControls();
 setView(state.view);
