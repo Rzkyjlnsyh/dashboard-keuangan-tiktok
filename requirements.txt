@@ -1,2 +1,0 @@
-# Cloud preview uses lightweight API stubs only.
-# Local dashboard dependencies are listed in requirements-local.txt.
