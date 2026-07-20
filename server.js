@@ -7,6 +7,23 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+// Load .env file
+const envFile = path.join(__dirname, '.env');
+if (fs.existsSync(envFile)) {
+  const envContent = fs.readFileSync(envFile, 'utf-8');
+  for (const line of envContent.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eq = trimmed.indexOf('=');
+    if (eq > 0) process.env[trimmed.slice(0, eq).trim()] = trimmed.slice(eq + 1).trim();
+  }
+  console.log('[server] .env loaded');
+}
+
+// Initialize database schema
+const pg = require('./lib/pg-connector');
+pg.initSchema().then(() => console.log('[server] Database schema initialized')).catch(e => console.error('[server] Schema init failed:', e.message));
+
 const ROOT = __dirname;
 const PORT = process.env.PORT || 3001;
 const STATIC_DIR = path.join(ROOT, 'static');

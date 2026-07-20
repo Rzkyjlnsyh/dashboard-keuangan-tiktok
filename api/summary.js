@@ -7,7 +7,7 @@ module.exports = async function handler(req, res) {
     const role = query.role || "owner";
     if (role === "owner" && !(await requireOwner(req, res))) return;
 
-    const filters = buildFilters({ preset: query.preset, month: query.month, store: query.store });
+    const filters = buildFilters({ preset: query.preset, month: query.month, store: query.store, mode: query.mode || "accrual" });
     const summary = await computeSummary(filters);
     
     return json(res, 200, role === "owner" ? summary : redactSummary(summary, role));

@@ -80,6 +80,19 @@
             <button data-preset="last14">14 Hari</button>
             <button data-preset="thisMonth" class="active">Bulan Ini</button>
             <button data-preset="month">Pilih Bulan</button>
+            <button data-preset="custom">Custom</button>
+          </div>
+        </div>
+        <div id="customDateRange" style="display:none;align-items:center;gap:6px;">
+          <input type="date" id="startDateFilter" style="background:var(--card-bg);color:#fff;border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+          <span style="color:#94a3b8;">s/d</span>
+          <input type="date" id="endDateFilter" style="background:var(--card-bg);color:#fff;border:1px solid var(--border);border-radius:6px;padding:4px 8px;">
+        </div>
+        <div class="secret">
+          <span>Mode Hitung</span>
+          <div class="segments" id="calcModeGroup">
+            <button data-calc-mode="accrual" class="active">Accrual (Real)</button>
+            <button data-calc-mode="settlement">Settlement (Cair)</button>
           </div>
         </div>
         <label>Bulan <select id="monthFilter"></select></label>
@@ -90,19 +103,31 @@
       <section id="alerts" class="alerts" data-show="owner,team,tv,ops"></section>
 
       <section class="kpis" data-show="owner,team,tv">
-        <article data-icon="O"><span>Order Selesai</span><strong id="orders">0</strong><em id="todayOrders">Retur/cancel 0</em></article>
-        <article data-icon="Rp"><span>Omzet Kotor</span><strong id="omzet">Rp0</strong><em>Sebelum diskon seller</em></article>
-        <article class="secret" data-icon="%"><span>Diskon Seller</span><strong id="profit">Rp0</strong><em id="margin">Potongan seller</em></article>
-        <article class="secret" data-icon="N"><span>Omzet Net</span><strong id="finalProfit">Rp0</strong><em id="finalProfitMeta">Kotor - diskon seller</em></article>
-        <article class="secret" data-icon="C"><span>Settlement Cair</span><strong id="estimatedProfit">Rp0</strong><em id="estimatedProfitMeta">Dari income statement</em></article>
-        <article data-icon="T"><span>Dana Tertahan</span><strong id="held">Rp0</strong><em id="heldMeta">Selisih belum cair</em></article>
-        <article class="secret" data-icon="-"><span>Potongan Platform</span><strong id="platformFee">Rp0</strong><em id="platformFeeMeta">Sudah cair + belum cair</em></article>
-        <article data-icon="X"><span>Paket Retur/Cancel</span><strong id="cancelPackages">0</strong><em id="cancelPackagesMeta">Retur 0 · Cancel 0</em></article>
-        <article class="secret" data-icon="A"><span>Biaya Iklan Total</span><strong id="adSpend">Rp0</strong><em>Settlement + top up</em></article>
-        <article class="secret" data-icon="GMV"><span>Iklan Settlement</span><strong id="adSpendSettlement">Rp0</strong><em>Dipotong dari GMV toko</em></article>
-        <article class="secret" data-icon="Bank"><span>Iklan Top Up</span><strong id="adSpendTopup">Rp0</strong><em>Dari rekening/manual</em></article>
-        <article class="secret" data-icon="H"><span>HPP + Packing</span><strong id="hpp">Rp0</strong><em>HPP/unit + packing/paket</em></article>
-        <article class="secret" data-icon="P"><span>Profit Bersih</span><strong id="bookProfit">Rp0</strong><em id="bookProfitMeta">Setelah biaya utama</em></article>
+        <div class="mode-indicator secret" id="modeLabel" style="grid-column:1/-1;text-align:center;padding:4px 12px;background:var(--card-bg);border-radius:8px;font-size:0.8rem;color:var(--accent);margin-bottom:8px;">Mode Accrual (Real Operasional)</div>
+        <article class="kpi-card" data-icon="O" data-drilldown="orders"><span>Order Selesai</span><strong id="orders">0</strong><em id="todayOrders">Retur/cancel 0</em></article>
+        <article class="kpi-card" data-icon="Rp" data-drilldown="omzet"><span>Omzet Kotor</span><strong id="omzet">Rp0</strong><em>Sebelum diskon seller</em></article>
+        <article class="kpi-card secret" data-icon="%" data-drilldown="discount"><span>Diskon Seller</span><strong id="profit">Rp0</strong><em id="margin">Potongan seller</em></article>
+        <article class="kpi-card secret" data-icon="N" data-drilldown="omzetnet"><span>Omzet Net</span><strong id="finalProfit">Rp0</strong><em id="finalProfitMeta">Kotor - diskon seller</em></article>
+        <article class="kpi-card secret" data-icon="C" data-drilldown="settlement"><span>Settlement Cair</span><strong id="estimatedProfit">Rp0</strong><em id="estimatedProfitMeta">Dari income statement</em></article>
+        <article class="kpi-card" data-icon="T" data-drilldown="held"><span>Dana Tertahan</span><strong id="held">Rp0</strong><em id="heldMeta">Selisih belum cair</em></article>
+        <article class="kpi-card secret" data-icon="-" data-drilldown="platform"><span>Potongan Platform</span><strong id="platformFee">Rp0</strong><em id="platformFeeMeta">Sudah cair + belum cair</em></article>
+        <article class="kpi-card" data-icon="X" data-drilldown="cancel"><span>Paket Retur/Cancel</span><strong id="cancelPackages">0</strong><em id="cancelPackagesMeta">Retur 0 · Cancel 0</em></article>
+        <article class="kpi-card secret" data-icon="A" data-drilldown="adspend"><span>Biaya Iklan Total</span><strong id="adSpend">Rp0</strong><em>Settlement + top up</em></article>
+        <article class="kpi-card secret" data-icon="GMV" data-drilldown="adspendsettlement"><span>Iklan Settlement</span><strong id="adSpendSettlement">Rp0</strong><em>Dipotong dari GMV toko</em></article>
+        <article class="kpi-card secret" data-icon="Bank" data-drilldown="adspendtopup"><span>Iklan Top Up</span><strong id="adSpendTopup">Rp0</strong><em>Dari rekening/manual</em></article>
+        <article class="kpi-card secret" data-icon="H" data-drilldown="hpp"><span>HPP + Packing</span><strong id="hpp">Rp0</strong><em id="hppMeta">HPP/unit + packing/paket</em></article>
+        <article class="kpi-card secret" data-icon="P" data-drilldown="profitbersih"><span>Profit Bersih</span><strong id="bookProfit">Rp0</strong><em id="bookProfitMeta">Setelah biaya utama</em></article>
+      </section>
+
+      <section id="drilldownPanel" class="panel secret" data-show="owner" style="display:none;">
+        <div class="panel-head">
+          <div><span>Drilldown</span><strong id="drilldownTitle">Detail Perhitungan</strong></div>
+          <button id="closeDrilldown" style="background:var(--border);color:#fff;border:none;border-radius:6px;padding:4px 12px;cursor:pointer;">Tutup</button>
+        </div>
+        <div id="drilldownFormula" style="padding:8px 16px;font-size:0.85rem;color:var(--accent);"></div>
+        <div id="drilldownTotal" style="padding:0 16px 8px;font-size:1.1rem;font-weight:700;"></div>
+        <div id="drilldownPagination" style="padding:4px 16px;display:flex;gap:4px;flex-wrap:wrap;"></div>
+        <div class="table-wrap" style="max-height:400px;overflow-y:auto;"><table id="drilldownTable"></table></div>
       </section>
 
       <section class="grid" data-show="owner,team,tv">

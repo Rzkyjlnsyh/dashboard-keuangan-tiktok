@@ -239,6 +239,9 @@ select, input[type="month"], input[type="file"] {
 }
 .kpis strong { font-size: 22px; line-height: 1.18; margin-top: 10px; display: block; letter-spacing: 0; overflow-wrap: normal; }
 .kpis em { color: var(--muted); font-style: normal; font-size: 13px; }
+.kpi-card { cursor: pointer; transition: transform .2s ease; }
+.kpi-card:hover { transform: translateY(-2px); box-shadow: 0 8px 28px rgba(216,173,99,.18); }
+.mode-indicator { font-weight: 600; }
 .grid { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(320px, .85fr); gap: 16px; margin-bottom: 16px; }
 .panel { padding: 18px; min-width: 0; }
 .panel.wide { min-height: 360px; }

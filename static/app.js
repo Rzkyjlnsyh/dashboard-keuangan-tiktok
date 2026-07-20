@@ -8,19 +8,22 @@ const state = {
   config: null,
   filters: { preset: "thisMonth", month: "", store: "all" },
   pendingFilters: { preset: "thisMonth", month: "", store: "all" },
+  calcMode: "accrual", // "accrual" or "settlement"
   skuSort: "profit",
   skuStatus: "all",
   statusSort: "late",
   statusFilter: "all",
   folderStore: "ventura",
+  drilldown: null, // { title, rows, total, formula }
 };
 
 const el = (id) => document.getElementById(id);
 const fmt = (n) => "Rp" + Math.round(Number(n || 0)).toLocaleString("id-ID");
+const fmtExact = (n) => "Rp" + Math.round(Number(n || 0)).toLocaleString("id-ID");  // Exact, no rounding
 const fmtCompact = (n) => {
   const value = Math.round(Number(n || 0));
-  if (Math.abs(value) >= 1_000_000_000) return "Rp" + (value / 1_000_000_000).toLocaleString("id-ID", { maximumFractionDigits: 1 }) + " M";
-  if (Math.abs(value) >= 1_000_000) return "Rp" + (value / 1_000_000).toLocaleString("id-ID", { maximumFractionDigits: 1 }) + " jt";
+  if (Math.abs(value) >= 1_000_000_000) return "Rp" + (value / 1_000_000_000).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " M";
+  if (Math.abs(value) >= 1_000_000) return "Rp" + (value / 1_000_000).toLocaleString("id-ID", { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " jt";
   if (Math.abs(value) >= 1_000) return "Rp" + (value / 1_000).toLocaleString("id-ID", { maximumFractionDigits: 0 }) + " rb";
   return fmt(value);
 };
@@ -128,8 +131,15 @@ function summaryParams() {
   const params = new URLSearchParams();
   params.set("preset", state.filters.preset);
   if (state.filters.preset === "month" && state.filters.month) params.set("month", state.filters.month);
+  if (state.filters.preset === "custom") {
+    var sd = document.getElementById("startDateFilter");
+    var ed = document.getElementById("endDateFilter");
+    if (sd && sd.value) params.set("startDate", sd.value);
+    if (ed && ed.value) params.set("endDate", ed.value);
+  }
   params.set("store", state.filters.store);
   params.set("role", state.accessRole);
+  params.set("mode", state.calcMode || "accrual");
   params.set("_", Date.now().toString());
   return params.toString();
 }
@@ -179,19 +189,12 @@ async function refresh() {
     await loadDataQuality();
     return;
   }
-  // Load per komponen — paralel biar cepat
-  const params = summaryParams();
-  const [mini, sku, daily] = await Promise.all([
-    api("/api/split-data?type=mini&" + params).then(r => (r && r.totals ? r : { ...r, totals: {} })).catch(e => ({ totals: {} })),
-    api("/api/split-data?type=sku&" + params).catch(e => ({ topSku: [], weakSku: [] })),
-    api("/api/split-data?type=daily&" + params).catch(e => ({ daily: [] })),
-  ]);
-  state.summary = mini;
-  // Generate available months from summary response if it has them
-  var availStores = mini.availableStores || defaultStores;
-  var availMonths = mini.availableMonths || [];
-  if (!availMonths.length && mini.generatedAt) {
-    // Fallback: generate last 12 months from current date
+  // Load dari summary API saja (sudah include daily, sku, operation, stores)
+  var summary = await api(summaryUrl()).then(function(r) { return (r && r.totals ? r : { totals: {} }); }).catch(function(e) { return { totals: {} }; });
+  state.summary = summary;
+  var availStores = summary.availableStores || defaultStores;
+  var availMonths = summary.availableMonths || [];
+  if (!availMonths.length && summary.generatedAt) {
     var now = new Date();
     for (var i = 0; i < 12; i++) {
       var y = now.getFullYear();
@@ -200,11 +203,7 @@ async function refresh() {
       now.setMonth(now.getMonth() - 1);
     }
   }
-  render({
-    ...mini, topSku: sku.topSku || [], weakSku: sku.weakSku || [], daily: daily.daily || [],
-    availableStores: availStores,
-    availableMonths: availMonths,
-  });
+  render(summary);
 }
   
 // Load Data Quality data in parallel
@@ -261,57 +260,75 @@ function populateMonths(months) {
 function render(summary) {
   if (!summary || !summary.totals) { summary = { totals: {}, alerts: [], status: [], operationStatus: [], operationDetails: [], topSku: [], weakSku: [], daily: [], stores: [], runs: [], auditEvents: [], adSpendRows: [], assistant: { score: 0, health: "Menunggu Data", forecast30Omzet: 0, insights: [], actions: [] }, availableStores: [], availableMonths: [] }; }
   const t = summary.totals || {};
-  const hasBook = Number(t.bookOrders || 0) > 0 || Number(t.bookOmzet || 0) > 0;
-  const viewOrders = hasBook ? Number(t.bookOrders || 0) : Number(t.orders || 0);
-  const viewGross = hasBook ? Number(t.bookGross || 0) : Number(t.gross || 0);
-  const viewDiscount = hasBook ? Number(t.bookSellerDiscount || 0) : Number(t.sellerDiscount || 0);
-  const viewOmzet = hasBook ? Number(t.bookOmzet || 0) : Number(t.omzet || 0);
-  const viewProfit = hasBook ? Number(t.bookProfit || 0) : Number(t.profit || 0);
-  const viewMargin = hasBook ? Number(t.bookMargin || 0) : Number(t.margin || 0);
-  const viewPlatformFinal = hasBook ? Number(t.bookPlatformFeeFinal || 0) : Number(t.platformFeeFinal || 0);
-  const viewPlatformEstimated = hasBook ? Number(t.bookPlatformFeeEstimated || 0) : Number(t.platformFeeEstimated || 0);
+  const mode = state.calcMode || "accrual";
+  // Use totals directly — settlement/platform/adSettlement come from income_raw now
+  const viewGross = Number(t.gross || 0);
+  const viewDiscount = Number(t.sellerDiscount || 0);
+  const viewOmzet = Number(t.omzet || 0);
+  const viewOmzetNet = Math.max(viewGross - viewDiscount, 0);
+  const viewSettlement = Number(t.settlement || 0);
+  const viewHeld = Number(t.held || 0);
+  const viewPlatformFinal = Number(t.platformFeeFinal || 0);
+  const viewPlatformEstimated = Number(t.platformFeeEstimated || 0);
   const viewPlatform = viewPlatformFinal + viewPlatformEstimated;
-  const viewSettlement = hasBook ? Number(t.bookSettlement || 0) : Number(t.settlement || 0);
-  const viewHeld = hasBook ? Number(t.bookHeld || 0) : Number(t.held || 0);
-  const incomeMissing = hasBook && !viewSettlement && Number(t.estimatedOrders || 0) > 0;
-  const viewHppPacking = hasBook
-    ? Number(t.bookHpp || 0) + Number(t.bookPacking || 0)
-    : Number(t.hpp || 0) + Number(t.packing || 0);
+  const viewProfit = Number(t.profit || 0);
+  const viewHpp = Number(t.hpp || 0);
+  const viewPacking = Number(t.packing || 0);
+  const viewHppPacking = viewHpp + viewPacking;
+  const viewMargin = viewOmzetNet > 0 ? (viewProfit / viewOmzetNet * 100) : 0;
+  const incomeMissing = Number(t.settlement || 0) <= 0;
+  const viewOrders = Number(t.orders instanceof Set ? t.orders.size : (t.orders || 0));
+  const viewFinalOrders = Number(t.finalOrders instanceof Set ? t.finalOrders.size : (t.finalOrders || 0));
+  const viewRefund = Number(t.refund || t.cancelledAmount || 0);
+  const viewAdSpend = Number(t.adSpend || 0);
+  const viewAdSpendSettlement = Number(t.adSpendSettlement || t.settlementAdSpend || 0);
+  const viewAdSpendTopup = Number(t.adSpendTopup || 0);
+  const viewRefundOrCancel = Number(t.cancelledAmount || 0);
+  const viewCancelledOrders = Number(t.cancelledOrders instanceof Set ? t.cancelledOrders.size : (t.cancelledOrders || 0));
+  const viewReturnPkg = Number(t.returnPackages || 0);
+  const viewCancelPkg = Number(t.cancelPackages || 0);
+  const viewCancelledPkg = Number(t.cancelledPackages || 0);
+  const viewAdjustment = Number(t.adjustmentAmount || 0);
+
   el("generatedAt").textContent = summary.generatedAt;
-  el("orders").textContent = num(viewOrders);
-  el("todayOrders").textContent = hasBook ? `Retur/cancel ${num(t.bookCancelledOrders || 0)} order` : "Hari ini " + num(t.todayOrders);
-  el("omzet").textContent = fmtCompact(viewGross);
-  el("profit").textContent = fmtCompact(viewDiscount);
+  el("orders").textContent = num(viewFinalOrders);
+  el("todayOrders").textContent = "Final "+num(viewFinalOrders)+" order \u00b7 Retur/cancel "+num(viewCancelledOrders)+" order";
+  el("omzet").textContent = fmt(viewGross);
+  el("profit").textContent = fmt(viewDiscount);
   el("margin").textContent = "Diskon seller";
-  el("finalProfit").textContent = fmtCompact(viewOmzet);
-  el("finalProfitMeta").textContent = "Kotor - diskon seller";
-  el("estimatedProfit").textContent = incomeMissing ? "Belum valid" : fmtCompact(viewSettlement);
-  el("estimatedProfitMeta").textContent = incomeMissing ? "Income belum match" : hasBook ? "Dari income statement" : `${num(t.finalOrders || 0)} order cair`;
-  el("held").textContent = fmtCompact(viewHeld);
-  el("heldMeta").textContent = hasBook ? "Omzet net - platform - settlement" : `${num(t.heldOrders || 0)} order belum cair`;
-  el("platformFee").textContent = fmtCompact(viewPlatform);
+  el("finalProfit").textContent = fmt(viewOmzetNet);
+  el("finalProfitMeta").textContent = "Omzet setelah diskon seller";
+  el("estimatedProfit").textContent = incomeMissing ? "Belum valid" : fmt(viewSettlement);
+  el("estimatedProfitMeta").textContent = incomeMissing ? "Income belum match" : "Dari income statement";
+  el("held").textContent = fmt(viewHeld);
+  el("heldMeta").textContent = num(t.heldOrders instanceof Set ? t.heldOrders.size : (t.heldOrders || 0))+" order belum cair";
+  el("platformFee").textContent = fmt(viewPlatform);
   const platformFeeMetaEl = document.getElementById("platformFeeMeta");
   if (platformFeeMetaEl) {
-    platformFeeMetaEl.textContent = `Sudah cair ${fmtCompact(viewPlatformFinal)} · belum cair ${fmtCompact(viewPlatformEstimated)}`;
+    platformFeeMetaEl.textContent = "Final "+fmt(viewPlatformFinal)+" \u00b7 Estimasi "+fmt(viewPlatformEstimated);
   }
   const cancelPackagesEl = document.getElementById("cancelPackages");
   const cancelPackagesMetaEl = document.getElementById("cancelPackagesMeta");
-  if (cancelPackagesEl) cancelPackagesEl.textContent = num(hasBook ? t.bookCancelledPackages : t.cancelledPackages);
+  if (cancelPackagesEl) cancelPackagesEl.textContent = num(viewCancelledPkg);
   if (cancelPackagesMetaEl) {
-    const returnPackages = hasBook ? t.bookReturnPackages : t.returnPackages;
-    const cancelPackages = hasBook ? t.bookCancelPackages : t.cancelPackages;
-    cancelPackagesMetaEl.textContent = `Retur ${num(returnPackages || 0)} · Cancel ${num(cancelPackages || 0)}`;
+    cancelPackagesMetaEl.textContent = "Retur "+num(viewReturnPkg)+" \u00b7 Cancel "+num(viewCancelPkg);
   }
-  el("adSpend").textContent = fmtCompact(t.adSpend);
+  el("adSpend").textContent = fmt(viewAdSpend);
   const adSpendSettlementEl = document.getElementById("adSpendSettlement");
-  if (adSpendSettlementEl) adSpendSettlementEl.textContent = fmtCompact(Number(t.adSpendSettlement || t.settlementAdSpend || 0));
+  if (adSpendSettlementEl) adSpendSettlementEl.textContent = fmt(viewAdSpendSettlement);
   const adSpendTopupEl = document.getElementById("adSpendTopup");
-  if (adSpendTopupEl) adSpendTopupEl.textContent = fmtCompact(Number(t.adSpendTopup || 0));
-  el("hpp").textContent = fmtCompact(viewHppPacking);
+  if (adSpendTopupEl) adSpendTopupEl.textContent = fmt(viewAdSpendTopup);
+  el("hpp").textContent = fmt(viewHppPacking);
+  const hppMetaEl = document.getElementById("hppMeta");
+  if (hppMetaEl) hppMetaEl.textContent = "HPP "+fmt(viewHpp)+" \u00b7 Packing "+fmt(viewPacking);
   const bookProfitEl = document.getElementById("bookProfit");
-  if (bookProfitEl) bookProfitEl.textContent = fmtCompact(viewProfit);
+  if (bookProfitEl) bookProfitEl.textContent = fmt(viewProfit);
   const bookProfitMetaEl = document.getElementById("bookProfitMeta");
-  if (bookProfitMetaEl) bookProfitMetaEl.textContent = `${pct(viewMargin)} margin`;
+  if (bookProfitMetaEl) bookProfitMetaEl.textContent = pct(viewMargin)+" margin";
+
+  // Mode label
+  const modeLabelEl = document.getElementById("modeLabel");
+  if (modeLabelEl) modeLabelEl.textContent = mode === "settlement" ? "Mode Settlement (Cair)" : "Mode Accrual (Real Operasional)";
   renderAlerts(summary.alerts || []);
   renderStatus(summary.status || [], summary.operationStatus || [], summary.operationDetails || []);
   renderTable("topSku", summary.topSku);
@@ -344,32 +361,44 @@ function renderAlerts(alerts) {
 function buildAssistantFromTotals(t) {
   var hpp = Number(t.hpp || 0);
   var packing = Number(t.packing || 0);
+  var platformFee = Number(t.platformFee || 0);
+  var refund = Number(t.refund || t.cancelledAmount || 0);
   var adSpend = Number(t.adSpend || 0);
-  var totalBiaya = hpp + packing + adSpend;
-  var margin = Number(t.margin || 0);
-  var score = margin >= 80 ? 90 : margin >= 60 ? 75 : margin >= 40 ? 60 : margin >= 20 ? 45 : 30;
+  var adSpendTopup = Number(t.adSpendTopup || 0);
+  var adSpendSettlement = Number(t.adSpendSettlement || t.settlementAdSpend || 0);
+  var totalBiaya = hpp + packing + platformFee + refund + adSpendTopup;
+  var omzet = Number(t.omzet || 0);
+  var gross = Number(t.gross || 0);
+  var sellerDiscount = Number(t.sellerDiscount || 0);
+  var profit = omzet - platformFee - refund - hpp - packing - adSpendTopup;
+  var margin = omzet > 0 ? (profit / omzet * 100) : 0;
+  var score = margin >= 30 ? 90 : margin >= 20 ? 75 : margin >= 10 ? 55 : margin >= 0 ? 40 : 20;
   return {
     score: score,
-    health: margin >= 60 ? "Sehat" : margin >= 30 ? "Waspada" : "Perlu Perhatian",
-    forecast30Omzet: Math.round(Number(t.omzet || 0)),
-    forecast30Profit: Math.round(Number(t.profit || 0)),
-    insights: ["Data dari split-data API — assistant AI belum tersedia."],
+    health: margin >= 25 ? "Sehat" : margin >= 10 ? "Waspada" : "Perlu Perhatian",
+    forecast30Omzet: Math.round(omzet),
+    forecast30Profit: Math.round(profit),
+    insights: ["Data dari split-data API - gunakan mode Accrual untuk perhitungan real operasional."],
     actions: ["Upload data HPP per SKU untuk perhitungan akurat.", "Input biaya iklan untuk profit bersih yang akurat."],
     accounting: {
-      omzetKotor: Number(t.gross || 0),
-      diskonSeller: Number(t.sellerDiscount || 0),
-      omzetNet: Number(t.omzet || 0),
+      omzetKotor: gross,
+      diskonSeller: sellerDiscount,
+      omzetNet: omzet,
       settlementCair: Number(t.settlement || 0),
-      potonganPlatform: Number(t.platformFee || 0),
+      potonganPlatform: platformFee,
+      potonganPlatformFinal: Number(t.platformFeeFinal || 0),
+      potonganPlatformEstimasi: Number(t.platformFeeEstimated || 0),
       hpp: hpp,
       packing: packing,
       biayaIklan: adSpend,
-      biayaIklanSettlement: Number(t.adSpendSettlement || t.settlementAdSpend || 0),
-      biayaIklanTopup: Number(t.adSpendTopup || 0),
+      biayaIklanSettlement: adSpendSettlement,
+      biayaIklanTopup: adSpendTopup,
       totalBiaya: totalBiaya,
-      returCancel: Number(t.refund || 0),
+      returCancel: refund,
       danaTertahan: Number(t.held || 0),
-      profitBersih: Number(t.profit || 0)
+      refund: refund,
+      profitBersih: profit,
+      hppPacking: hpp + packing
     }
   };
 }
@@ -894,6 +923,9 @@ document.querySelectorAll("[data-preset]").forEach(btn => btn.addEventListener("
     state.pendingFilters.month = "";
     el("monthFilter").value = "";
   }
+  // Show/hide custom date inputs
+  var customDiv = document.getElementById("customDateRange");
+  if (customDiv) customDiv.style.display = btn.dataset.preset === "custom" ? "flex" : "none";
   syncFilterControls();
   scheduleApplyFilters();
 }));
@@ -908,6 +940,11 @@ el("storeFilter").addEventListener("change", (event) => {
   syncFilterControls();
   scheduleApplyFilters();
 });
+// Custom date inputs
+var startDateEl = document.getElementById("startDateFilter");
+var endDateEl = document.getElementById("endDateFilter");
+if (startDateEl) startDateEl.addEventListener("change", function() { scheduleApplyFilters(300); });
+if (endDateEl) endDateEl.addEventListener("change", function() { scheduleApplyFilters(300); });
 el("applyFilters").addEventListener("click", applyFilters);
 el("skuSort").addEventListener("change", (event) => {
   state.skuSort = event.target.value;
@@ -931,6 +968,178 @@ el("folderStore").addEventListener("change", (event) => {
 });
 el("refreshBtn").addEventListener("click", refresh);
 el("jumpUploadBtn").addEventListener("click", () => { setView("ops"); el("uploadPanel").scrollIntoView({ behavior: "smooth" }); });
+
+// Mode calculation toggle
+document.querySelectorAll("[data-calc-mode]").forEach(function(btn) {
+  btn.addEventListener("click", function() {
+    state.calcMode = btn.dataset.calcMode;
+    document.querySelectorAll("[data-calc-mode]").forEach(function(b) {
+      b.classList.toggle("active", b.dataset.calcMode === state.calcMode);
+    });
+    refresh().catch(function(err) { showNotice(err.message); });
+  });
+});
+
+// Drilldown close
+var drillClose = document.getElementById("closeDrilldown");
+if (drillClose) drillClose.addEventListener("click", function() {
+  var p = document.getElementById("drilldownPanel");
+  if (p) p.style.display = "none";
+});
+
+// KPI card drilldown click
+document.querySelectorAll(".kpi-card").forEach(function(card) {
+  card.style.cursor = "pointer";
+  card.addEventListener("click", function() {
+    var type = card.dataset.drilldown;
+    if (type) openDrilldown(type);
+  });
+});
+
+function openDrilldown(type, page) {
+  if (!state.summary || !state.summary.totals) return;
+  page = page || 0;
+  var t = state.summary.totals;
+  var s = state.summary;
+  var panel = document.getElementById("drilldownPanel");
+  if (!panel) return;
+  panel.style.display = "block";
+  
+  var info = {title:type,formula:"-",total:"-"};
+  var rows = [];
+  var columns = [];
+  var totalRows = 0;
+  var PER_PAGE = 25;
+  
+  if (type === "orders") {
+    info = {title:"Order Selesai",formula:"COUNT DISTINCT order_id WHERE status=Selesai",total:num(t.finalOrders instanceof Set?t.finalOrders.size:(t.finalOrders||0))};
+    columns = ["Order ID","Status","Paket","Omzet","Tanggal"];
+    var ord = (s.operationDetails||[]).filter(function(r){return r.bucket==="completed";});
+    totalRows = ord.length;
+    ord = ord.slice(page*PER_PAGE, (page+1)*PER_PAGE);
+    rows = ord.map(function(r){return["<strong>"+escapeHtml(r.orderId)+"</strong>","<span class=badge completed>Selesai</span>",num(r.packageCount),fmtExact(r.omzet||0),escapeHtml(r.createdAt||"-")];});
+  } else if (type === "omzet") {
+    info = {title:"Omzet Kotor",formula:"SUM(Subtotal produk sebelum diskon)",total:fmtExact(t.gross)};
+    columns = ["SKU","Qty","Harga/Unit","Subtotal"];
+    var skuRows = (s.skuDetails||[]).slice(0,100);
+    totalRows = skuRows.length;
+    skuRows = skuRows.slice(page*PER_PAGE, (page+1)*PER_PAGE);
+    rows = skuRows.map(function(r){var up = r.qty>0?Math.round(r.omzet/r.qty):0;return[escapeHtml(r.sku),num(r.qty),fmtExact(up),fmtExact(r.omzet)];});
+  } else if (type === "discount") {
+    info = {title:"Diskon Seller",formula:"SUM(Diskon penjual)",total:fmtExact(t.sellerDiscount)};
+    columns = ["SKU","Qty","Total Diskon"];
+    var skuRows2 = (s.skuDetails||[]).slice(0,100);
+    totalRows = skuRows2.length;
+    skuRows2 = skuRows2.slice(page*PER_PAGE, (page+1)*PER_PAGE);
+    rows = skuRows2.map(function(r){var disc = Math.round((r.sellerDiscount||0));return[escapeHtml(r.sku),num(r.qty),fmtExact(disc)];});
+  } else if (type === "omzetnet") {
+    info = {title:"Omzet Net",formula:"Omzet Kotor "+fmtExact(t.gross)+" - Diskon Seller "+fmtExact(t.sellerDiscount),total:fmtExact(t.omzet)};
+  } else if (type === "settlement") {
+    info = {title:"Settlement Cair",formula:"SUM(Jumlah penyelesaian pembayaran) dari Income Statement, filter: Jenis=Pesanan, Waktu Pemesanan="+s.filters.startDate+" s/d "+s.filters.endDate, total:fmtExact(t.settlement)};
+    columns = ["Order ID (Pesanan)","Tanggal Pemesanan","Settlement","Biaya Platform"];
+    // Fetch settlement details from operationDetails that have settlement
+    var settRows = (s.operationDetails||[]).filter(function(r){return r.bucket==="completed";}).slice(0,200);
+    totalRows = settRows.length;
+    settRows = settRows.slice(page*PER_PAGE, (page+1)*PER_PAGE);
+    rows = settRows.map(function(r){return["<strong>"+escapeHtml(r.orderId)+"</strong>",escapeHtml(r.createdAt||"-"),fmtExact(r.omzet||0),"(lihat income)"];});
+    if (rows.length === 0) {
+      rows = [["(Data settlement diambil dari Income Statement)","Filter: Jenis=Pesanan, "+s.filters.startDate+".."+s.filters.endDate,"Total: "+fmtExact(t.settlement),"Biaya: "+fmtExact(t.platformFee)]];
+    }
+  } else if (type === "held") {
+    info = {title:"Dana Tertahan",formula:"Omzet Net "+fmtExact(t.omzet)+" - Potongan Platform "+fmtExact(t.platformFee)+" - Settlement Cair "+fmtExact(t.settlement)+" = "+fmtExact(t.held),total:fmtExact(t.held)};
+    if (t.held > 0) {
+      columns = ["Penjelasan"];
+      rows = [["Dana tertahan = selisih antara omzet net dengan (potongan platform + settlement cair). Ini adalah uang yang belum dicairkan oleh TikTok."]];
+    }
+  } else if (type === "platform") {
+    info = {title:"Potongan Platform",formula:"ABS(SUM(Total Biaya)) dari Income Statement, filter: Jenis=Pesanan, Waktu Pemesanan="+s.filters.startDate+" s/d "+s.filters.endDate, total:fmtExact(t.platformFee)};
+    columns = ["Sumber Data","Jenis Transaksi","Periode","Total Biaya"];
+    rows = [["Income Statement (finance_income_raw)","Pesanan",s.filters.startDate+" s/d "+s.filters.endDate,fmtExact(t.platformFee)]];
+  } else if (type === "cancel") {
+    info = {title:"Paket Retur/Cancel",formula:"Retur: "+num(t.returnPackages||0)+" paket | Cancel: "+num(t.cancelPackages||0)+" paket | Total: "+num(t.cancelledPackages||0),total:num(t.cancelledPackages||0)};
+    columns = ["Order ID","Tipe","Status","Cancel Reason","Tracking","Paket"];
+    var cancelRows = (s.operationDetails||[]).filter(function(r){return r.bucket==="canceled"||r.bucket==="returned";});
+    totalRows = cancelRows.length;
+    cancelRows = cancelRows.slice(page*PER_PAGE, (page+1)*PER_PAGE);
+    rows = cancelRows.map(function(r){return["<strong>"+escapeHtml(r.orderId)+"</strong>","<span class=badge "+r.bucket+">"+escapeHtml(r.label)+"</span>",escapeHtml(r.status||"-"),escapeHtml(r.cancelReason||"-"),escapeHtml(r.trackingId||"-"),num(r.packageCount)];});
+  } else if (type === "adspend" || type === "adspendsettlement" || type === "adspendtopup") {
+    var allAdRows = (s.adSpendRows||[]);
+    var adRows;
+    if (type === "adspendsettlement") {
+      adRows = allAdRows.filter(function(r){return (r.channel||"").toLowerCase().indexOf("gmv")>=0;});
+      info = {title:"Iklan Settlement/GMV",formula:"Dari Income Statement: Jenis=Pembayaran GMV untuk Iklan TikTok, Waktu Pemesanan="+s.filters.startDate+" s/d "+s.filters.endDate, total:fmtExact(t.adSpendSettlement||t.settlementAdSpend)};
+    } else if (type === "adspendtopup") {
+      adRows = allAdRows.filter(function(r){return (r.channel||"").toLowerCase().indexOf("top up")>=0;});
+      info = {title:"Iklan Top Up",formula:"SUM(amount) WHERE channel=TikTok Top Up",total:fmtExact(t.adSpendTopup)};
+    } else {
+      adRows = allAdRows;
+      info = {title:"Biaya Iklan Total",formula:"GMV "+fmtExact(t.adSpendSettlement)+" + Top Up "+fmtExact(t.adSpendTopup),total:fmtExact(t.adSpend)};
+    }
+    columns = ["Toko","Tanggal","Jumlah","Channel","Campaign"];
+    totalRows = adRows.length;
+    adRows = adRows.slice(page*PER_PAGE, (page+1)*PER_PAGE);
+    rows = adRows.map(function(r){return[escapeHtml(r.store_name||""),escapeHtml(r.spend_date||""),fmtExact(r.amount),escapeHtml(r.channel||""),escapeHtml(r.campaign||"")];});
+    // If no GMV ad rows in adSpendRows, show from summary totals
+    if (type === "adspendsettlement" && rows.length === 0) {
+      rows = [["(Data dari Income Statement)","Jenis: Pembayaran GMV untuk Iklan TikTok","Periode: "+s.filters.startDate+".."+s.filters.endDate,"Total: "+fmtExact(t.adSpendSettlement||t.settlementAdSpend),""]];
+    }
+  } else if (type === "hpp") {
+    info = {title:"HPP + Packing",formula:"HPP = SUM(Qty x HPP per unit). Packing = COUNT DISTINCT(Tracking>Package>Order) x Rp2.000",total:fmtExact((Number(t.hpp||0)+Number(t.packing||0)))};
+    columns = ["SKU","Qty","HPP/Unit","Total HPP","Status"];
+    var hppRows = (s.skuDetails||[]).filter(function(r){return r.hpp>0||r.qty>0;});
+    totalRows = hppRows.length;
+    hppRows = hppRows.slice(page*PER_PAGE, (page+1)*PER_PAGE);
+    rows = hppRows.map(function(r){var templateHpp = r.unitHpp || (r.qtyCost>0?Math.round(r.hpp/r.qtyCost):0);return[escapeHtml(r.sku),num(r.qty)+" (cost: "+num(r.qtyCost||0)+")",fmtExact(templateHpp),fmtExact(r.hpp||0),r.missingCost?"⚠️ Belum dipetakan":"✅"];});
+  } else if (type === "profitbersih") {
+    var base = t.settlement||0;
+    var pengg = t.adjustmentAmount||0;
+    var hp = (t.hpp||0)+(t.packing||0);
+    var iklan = (t.adSpendTopup||0)+(t.adSpendSettlement||0);
+    info = {title:"Profit Bersih",formula:"Settlement "+fmtExact(base)+" + Penggantian "+fmtExact(pengg)+" - HPP+Packing "+fmtExact(hp)+" - Iklan "+fmtExact(iklan)+" = "+fmtExact(t.profit),total:fmtExact(t.profit)};
+  }
+  
+  document.getElementById("drilldownTitle").textContent = info.title;
+  document.getElementById("drilldownFormula").textContent = info.formula;
+  document.getElementById("drilldownTotal").textContent = "Total: " + info.total;
+  
+  var tableHtml = "";
+  if (rows.length && columns.length) {
+    var th = columns.map(function(c){return"<th>"+escapeHtml(c)+"</th>";}).join("");
+    var tb = rows.map(function(r){return"<tr>"+r.map(function(c){return"<td>"+c+"</td>";}).join("")+"</tr>";}).join("");
+    tableHtml = "<thead><tr>"+th+"</tr></thead><tbody>"+(tb||"<tr><td colspan="+columns.length+">Tidak ada data</td></tr>")+"</tbody>";
+  } else {
+    tableHtml = "<tbody><tr><td colspan=5 style=padding:16px;text-align:center;color:#94a3b8;>"+info.formula+"<br><strong>Total: "+info.total+"</strong></td></tr></tbody>";
+  }
+  
+  // Pagination
+  var totalPages = Math.ceil(totalRows / PER_PAGE);
+  var paginationHtml = "";
+  if (totalPages > 1) {
+    paginationHtml = "<div class=drilldown-pagination id=drilldownPages>";
+    for (var p = 0; p < Math.min(totalPages, 20); p++) {
+      paginationHtml += "<button data-drilldown-page="+p+" class="+(p===page?"active":"")+">"+(p+1)+"</button>";
+    }
+    if (totalPages > 20) paginationHtml += "<span>..."+totalPages+" halaman</span>";
+    paginationHtml += "<span style=margin-left:8px;color:#94a3b8;>"+totalRows+" baris total</span></div>";
+  }
+  
+  document.getElementById("drilldownTable").innerHTML = tableHtml;
+  document.getElementById("drilldownPagination").innerHTML = paginationHtml;
+  
+  // Store current drilldown type for pagination
+  state._drilldownType = type;
+  
+  // Re-attach pagination event listeners
+  var pageButtons = document.querySelectorAll("#drilldownPages button");
+  for (var i = 0; i < pageButtons.length; i++) {
+    pageButtons[i].addEventListener("click", function() {
+      var p = parseInt(this.getAttribute("data-drilldown-page"));
+      if (!isNaN(p)) openDrilldown(state._drilldownType, p);
+    });
+  }
+  
+  panel.scrollIntoView({behavior:"smooth"});
+}
 el("sampleBtn").addEventListener("click", async () => {
   if (isCloudPreview) {
     showNotice("Di Vercel kita pakai data real dari upload, bukan data contoh. Pilih Upload Data lalu masukkan file SKU, order, atau pencairan.");

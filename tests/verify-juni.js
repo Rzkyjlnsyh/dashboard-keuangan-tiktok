@@ -1,0 +1,22 @@
+const {computeSummary} = require('../lib/finance-cloud');
+(async()=>{
+  const s = await computeSummary({preset:'month',month:'2026-06',store:'custombase',mode:'accrual'});
+  const t = s.totals;
+  const fmt = n => Math.round(n||0).toLocaleString('id-ID');
+  console.log('=== JUNI 2026 CUSTOMBASE ACCRUAL MODE ===');
+  console.log('Omzet Kotor:', fmt(t.gross), '| Expected 54.043.700');
+  console.log('Diskon Seller:', fmt(t.sellerDiscount), '| Expected 21.310.753');
+  console.log('Omzet Net:', fmt(t.omzet), '| Expected 32.732.947');
+  console.log('Refund:', fmt(t.refund), '| Expected 109.094');
+  console.log('Platform Fee:', fmt(t.platformFee), '| Expected 8.665.750');
+  console.log('  Final (real):', fmt(t.platformFeeFinal), '| Expected 5.026.837');
+  console.log('  Estimated:', fmt(t.platformFeeEstimated), '| Expected 3.638.913');
+  console.log('Penggantian:', fmt(t.adjustmentAmount), '| Expected 56.100');
+  console.log('HPP:', fmt(t.hpp), '| Expected 7.546.100');
+  console.log('Packing:', fmt(t.packing), '| Expected 3.572.000');
+  console.log('Iklan GMV:', fmt(t.adSpendSettlement), '| Expected 6.625.056');
+  console.log('Iklan Top Up:', fmt(t.adSpendTopup), '| Expected 222.000');
+  console.log('Profit:', fmt(t.profit), '| Expected 6.049.047');
+  console.log('Orders:', t.finalOrders instanceof Set ? t.finalOrders.size : t.finalOrders);
+  process.exit(0);
+})();

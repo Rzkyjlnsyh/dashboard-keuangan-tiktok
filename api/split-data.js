@@ -53,12 +53,74 @@ async function computeMini(filters) {
     ]);
     const row = r.rows[0] || {};
     const gross = Number(row.total_gross||0), sd = Number(row.total_sd||0);
-    const omzet = Math.round(gross - sd), pf = Math.round(Number(row.total_fee||0));
+    const omzet = Math.round(Math.max(gross - sd, 0));
+    const pf = Math.round(Number(row.total_fee||0));
     const adSpend = Math.round(Number(ar.rows[0]?.t||0));
-    const hpp = Math.round(Number(hr.rows[0]?.hpp||0)), packing = Math.round(Number(hr.rows[0]?.packing||0));
-    const profit = omzet - pf - hpp - packing - adSpend;
+    const hpp = Math.round(Number(hr.rows[0]?.hpp||0));
+    const packing = Math.round(Number(hr.rows[0]?.packing||0));
+    const settlement = Math.round(Number(row.total_settlement||0));
+    const refund = Math.round(Number(row.total_refund||0));
+    const profit = omzet - pf - refund - hpp - packing - adSpend;
     safeLog("split_mini",{ms:Date.now()-startedAt});
-    return { generatedAt:nowIso(), totals:{ orders:Number(row.total_orders||0), lines:Number(row.total_lines||0), gross:Math.round(gross), sellerDiscount:Math.round(sd), omzet, platformFee:pf, settlement:Math.round(Number(row.total_settlement||0)), refund:Math.round(Number(row.total_refund||0)), adSpend, hpp, packing, profit, margin:omzet>0?Math.round((profit/omzet)*1000)/10:0, cancelledOrders:Number(cr.rows[0]?.cnt||0) }};
+    return {
+      generatedAt:nowIso(),
+      totals:{
+        orders:Number(row.total_orders||0),
+        lines:Number(row.total_lines||0),
+        gross:Math.round(gross),
+        sellerDiscount:Math.round(sd),
+        omzet,
+        platformFee:pf,
+        platformFeeFinal:0,
+        platformFeeEstimated:pf,
+        settlement,
+        refund,
+        adSpend,
+        adSpendSettlement:0,
+        adSpendTopup:adSpend,
+        settlementAdSpend:0,
+        hpp,
+        packing,
+        profit,
+        profitBeforeAds:profit + adSpend,
+        margin:omzet>0?Math.round((profit/omzet)*1000)/10:0,
+        cancelledOrders:Number(cr.rows[0]?.cnt||0),
+        held:0,
+        cancelledAmount:refund,
+        bookOrders:Number(row.total_orders||0),
+        bookOmzet:omzet,
+        bookGross:Math.round(gross),
+        bookSellerDiscount:Math.round(sd),
+        bookPlatformFee:pf,
+        bookPlatformFeeFinal:0,
+        bookPlatformFeeEstimated:pf,
+        bookSettlement:settlement,
+        bookHpp:hpp,
+        bookPacking:packing,
+        bookHeld:0,
+        bookRefund:refund,
+        bookCancelledAmount:refund,
+        bookProfit:profit,
+        bookProfitBeforeAds:profit+adSpend,
+        bookAdSpend:adSpend,
+        bookCancelledOrders:Number(cr.rows[0]?.cnt||0),
+        bookCancelledPackages:0,
+        bookReturnPackages:0,
+        bookCancelPackages:0,
+        bookMargin:omzet>0?Math.round((profit/omzet)*1000)/10:0,
+        finalOrders:0,
+        finalOmzet:0,
+        finalProfit:0,
+        estimatedOrders:Number(row.total_orders||0),
+        estimatedOmzet:omzet,
+        estimatedProfit:profit,
+        heldOrders:0,
+        todayOrders:0,
+        cancelledPackages:0,
+        returnPackages:0,
+        cancelPackages:0,
+      }
+    };
   } catch(e) { safeLog("split_mini_error",{error:e.message}); return emptyMini(e.message); }
 }
 

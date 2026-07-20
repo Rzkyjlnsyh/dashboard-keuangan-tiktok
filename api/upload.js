@@ -127,6 +127,8 @@ function sheetHeaderTokens(XLSX, sheet) {
 }
 
 function pickSheet(XLSX, workbook) {
+  if (workbook.SheetNames.includes("OrderSKUList")) return "OrderSKUList";
+  if (workbook.SheetNames.includes("Detail pesanan")) return "Detail pesanan";
   if (workbook.SheetNames.includes("Daftar Pesanan")) return "Daftar Pesanan";
   const incomeSheet = workbook.SheetNames.find(name => {
     const tokens = sheetHeaderTokens(XLSX, workbook.Sheets[name]);
@@ -144,11 +146,23 @@ function readXlsxRows(buffer) {
   } catch (error) {
     throw new Error("Server belum punya dependency pembaca Excel. Tunggu deploy Vercel selesai lalu coba lagi.");
   }
-  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: true, raw: false, nodim: true, sheetRows: 0 });
+  const workbook = XLSX.read(buffer, { type: "buffer", cellDates: false, raw: true, nodim: true, sheetRows: 0 });
   const sheetName = pickSheet(XLSX, workbook);
   const sheet = workbook.Sheets[sheetName];
   if (!sheet) return [];
-  const range = getSheetRange(XLSX, sheet);
+  
+  // Fix: TikTok sheets may have !ref smaller than actual data. Find actual range.
+  let range = getSheetRange(XLSX, sheet);
+  const keys = Object.keys(sheet).filter(k => k && k[0] !== "!");
+  for (const key of keys) {
+    try {
+      const cell = XLSX.utils.decode_cell(key);
+      if (cell.r > range.e.r) range.e.r = cell.r;
+      if (cell.c > range.e.c) range.e.c = cell.c;
+    } catch(e) {}
+  }
+  // Override sheet ref so sheet_to_json reads all rows
+  sheet["!ref"] = XLSX.utils.encode_range(range);
   const headers = [];
   for (let col = range.s.c; col <= range.e.c; col += 1) {
     const cell = sheet[XLSX.utils.encode_cell({ r: range.s.r, c: col })];
@@ -167,7 +181,13 @@ function readXlsxRows(buffer) {
       if (value !== "" && value != null) hasValue = true;
       row[header] = value == null ? "" : value;
     }
-    if (hasValue) rows.push(row);
+    if (hasValue) {
+      // Skip TikTok description rows (first column explains the field)
+      const firstVal = String(Object.values(row)[0] || "").trim().toLowerCase();
+      if (firstVal.includes("platform unique order") || firstVal.includes("current order status") ||
+          firstVal.includes("id transaksi") || firstVal === "nama") continue;
+      rows.push(row);
+    }
   }
   return rows;
 }

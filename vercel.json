@@ -1,33 +1,13 @@
 {
-  "framework": null,
-  "buildCommand": "npm run build",
-  "outputDirectory": "public",
-  "crons": [
-    {
-      "path": "/api/telegram-daily",
-      "schedule": "30 0 * * *"
+  "functions": {
+    "api/*.js": {
+      "runtime": "nodejs20.x",
+      "maxDuration": 30
     }
-  ],
+  },
   "rewrites": [
-    {
-      "source": "/",
-      "destination": "/static/index.html"
-    },
-    {
-      "source": "/owner",
-      "destination": "/static/index.html"
-    },
-    {
-      "source": "/team",
-      "destination": "/static/index.html"
-    },
-    {
-      "source": "/tv",
-      "destination": "/static/index.html"
-    },
-    {
-      "source": "/api/accounting",
-      "destination": "/api/accounting"
-    }
+    { "source": "/api/(.*)", "destination": "/api/$1" },
+    { "source": "/static/(.*)", "destination": "/static/$1" },
+    { "source": "/(.*)", "destination": "/static/index.html" }
   ]
 }

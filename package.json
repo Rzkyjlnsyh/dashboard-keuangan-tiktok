@@ -1,10 +1,21 @@
 {
+  "name": "dashboard-keuangan-tiktok",
+  "version": "1.0.0",
+  "description": "Dashboard Keuangan TikTok - Monitoring Multi-Store",
   "dependencies": {
-    "xlsx": "^0.18.5",
-    "pg": "^8.13.0"
+    "pg": "^8.13.0",
+    "xlsx": "^0.18.5"
+  },
+  "optionalDependencies": {
+    "better-sqlite3": "^12.11.1"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "scripts": {
-    "build": "mkdir -p public/static && cp -R static/. public/static/ && cp static/index.html public/index.html",
-    "test": "node tests/finance-regression.test.js"
+    "build": "echo 'Ready'",
+    "start": "node server.js",
+    "test": "node tests/finance-regression.test.js",
+    "import": "node scripts/ultimate-import.js"
   }
 }
