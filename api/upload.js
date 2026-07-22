@@ -4,6 +4,9 @@ const { json, readJson, importRows, requireOwner, safeLog } = require("../lib/fi
 module.exports = async function handler(req, res) {
   if (req.method !== "POST") return json(res, 405, { ok: false, error: "Method tidak didukung." });
   if (!(await requireOwner(req, res))) return;
+  
+  // Ensure database schema exists
+  try { await pg.initSchema(); } catch(e) { console.error('Schema init error:', e.message); }
   try {
     const contentType = req.headers["content-type"] || "";
     if (contentType.includes("multipart/form-data")) {

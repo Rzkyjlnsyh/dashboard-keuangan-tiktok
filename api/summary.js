@@ -1,8 +1,12 @@
 const { json, buildFilters, computeSummary, redactSummary, emptySummary, requireOwner, safeLog } = require("../lib/finance-cloud");
+const pg = require("../lib/pg-connector");
 
 module.exports = async function handler(req, res) {
   if (req.method !== "GET") return json(res, 405, { ok: false, error: "Method tidak didukung." });
   try {
+    // Ensure schema
+    try { await pg.initSchema(); } catch(e) {}
+    
     const query = req.query || {};
     const role = query.role || "owner";
     if (role === "owner" && !(await requireOwner(req, res))) return;
