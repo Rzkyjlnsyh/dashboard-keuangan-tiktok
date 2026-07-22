@@ -1166,11 +1166,26 @@ document.getElementById("uploadForm").addEventListener("submit", async (event) =
     }
     el("fileInput").value = "";
     setView("owner");
-    const flatResults = uploadResults.flatMap(item => item && item.results ? item.results : [item]).filter(Boolean);
-    const adRows = flatResults.reduce((sum, item) => sum + Number(item.adSpendRows || 0), 0);
-    const adTotal = flatResults.reduce((sum, item) => sum + Number(item.adSpendTotal || 0), 0);
-    const adText = adRows ? ` Iklan GMV settlement terdeteksi ${adRows} transaksi (${fmtCompact(adTotal)}).` : "";
-    showNotice((isCloudPreview ? "Upload selesai dan data tersimpan ke Supabase." : "Upload selesai dan dashboard diperbarui.") + adText, "info");
+    
+    // Show detailed upload result
+    const flat = (uploadResults||[]).flatMap(item => item && item.results ? item.results : [item]).filter(Boolean);
+    let detailMsg = '';
+    for (const r of flat) {
+      const kindLabel = {orders:'Orders',income:'Income',sku:'SKU HPP',ads:'Iklan'}[r.kind]||r.kind||'Data';
+      detailMsg += `${kindLabel}: ${r.rows||0} baris diproses`;
+      if (r.inserted) detailMsg += `, ${r.inserted} baru`;
+      if (r.updated) detailMsg += `, ${r.updated} diperbarui`;
+      if (r.adSpendRows) detailMsg += `, ${r.adSpendRows} iklan GMV (Rp${Math.round(r.adSpendTotal||0).toLocaleString('id-ID')})`;
+      if (r.unmatchedOrders) detailMsg += `, ${r.unmatchedOrders} tidak match`;
+      detailMsg += '. ';
+    }
+    const adRows = flat.reduce((sum, item) => sum + Number(item.adSpendRows || 0), 0);
+    const adTotal = flat.reduce((sum, item) => sum + Number(item.adSpendTotal || 0), 0);
+    const adText = adRows ? ` Iklan GMV settlement terdeteksi ${adRows} transaksi (Rp${Math.round(adTotal).toLocaleString('id-ID')}).` : "";
+    showNotice((detailMsg || "Upload selesai.") + adText, "info");
+    
+    // Refresh to show latest data
+    setTimeout(refresh, 500);
   } catch (err) {
     showNotice(err.message);
   }
