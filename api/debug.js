@@ -21,11 +21,15 @@ module.exports = async function handler(req, res) {
     } catch(e) { result[table] = 'error: '+e.message.substring(0,50); }
   }
   
-  // Show sample data
+  // Test fetchAll vs direct query
   try {
-    const r = await pg.pgQuery('SELECT store_name, created_at, status, order_id FROM finance_order_lines LIMIT 3', []);
-    result.sampleOrders = r.rows || [];
-  } catch(e) { result.sampleOrders = 'error: '+e.message.substring(0,50); }
+    const r1 = await pg.fetchAll("finance_order_lines", "select=*&store_name=eq.custombase&and=(created_at.gte.2026-05-01,created_at.lte.2026-05-31)");
+    result.fetchAllTest = (r1||[]).length;
+    const r2 = await pg.pgQuery("SELECT COUNT(*) as c FROM finance_order_lines WHERE store_name='custombase' AND created_at >= '2026-05-01' AND created_at <= '2026-05-31'", []);
+    result.directQuery = r2.rows?.[0]?.c;
+    const r3 = await pg.fetchAll("finance_order_lines", "limit=5");
+    result.simpleFetch = (r3||[]).length;
+  } catch(e) { result.fetchErr = e.message; }
   
   res.statusCode = 200;
   res.end(JSON.stringify(result, null, 2));
