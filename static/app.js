@@ -102,6 +102,13 @@ function setView(view) {
 }
 
 function withOwnerPin(options = {}) {
+  // For FormData (file upload), let browser auto-set Content-Type
+  if (options.body instanceof FormData) {
+    const pin = localStorage.getItem("pareOwnerPin") || "";
+    const headers = {};
+    if (pin) headers["X-Owner-Pin"] = pin;
+    return { cache: "no-store", ...options, headers };
+  }
   const headers = new Headers(options.headers || {});
   const pin = localStorage.getItem("pareOwnerPin") || "";
   if (pin) headers.set("X-Owner-Pin", pin);
