@@ -101,15 +101,35 @@
     }
     try {
       for (const file of files) {
-        if (/\.xlsx$/i.test(file.name)) {
-          if (submitButton) submitButton.textContent = `Upload ${file.name}`;
-          if (notify) notify(`Mengirim ${file.name} ke server agar Excel dibaca penuh...`, "info", false);
-          const formData = new FormData();
-          formData.append("storeName", storeName);
-          formData.append("kind", kind);
-          formData.append("files", file, file.name);
-          const result = await api("/api/upload", { method: "POST", body: formData });
-          results.push(result);
+        if (/\\.xlsx$/i.test(file.name)) {
+          if (submitButton) submitButton.textContent = `Membaca ${file.name}`;
+          if (notify) notify(`Membaca ${file.name} di browser...`, "info", false);
+          // Read Excel in browser, send JSON (faster than sending file to server)
+          let rows = await readRows(file);
+          if (!rows.length) throw new Error(`File ${file.name} kosong atau header tidak terbaca.`);
+          if (notify) notify(`Mengirim ${rows.length} baris ke server...`, "info", false);
+          
+          // Send as JSON in chunks for large files
+          const CHUNK = 2000;
+          if (rows.length <= CHUNK) {
+            const result = await api("/api/upload", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ storeName, kind, filename: file.name, rows }),
+            });
+            results.push(result);
+          } else {
+            // Batch send in chunks
+            for (let i = 0; i < rows.length; i += CHUNK) {
+              const chunk = rows.slice(i, Math.min(i + CHUNK, rows.length));
+              const result = await api("/api/upload", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ storeName, kind, filename: file.name + ` [bagian ${Math.floor(i/CHUNK)+1}]`, rows: chunk }),
+              });
+              results.push(result);
+            }
+          }
           continue;
         }
         let rows = await readRows(file);
