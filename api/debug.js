@@ -6,22 +6,22 @@ module.exports = async function handler(req, res) {
   let dbStatus = "unknown", poolExists = false, connTest = "";
   
   try {
-    const pgMod = require("pg");
-    poolExists = true;
-    
-    const client = await new pgMod.Pool({
+    const { Pool } = require('pg');
+    const testPool = new Pool({
       connectionString: process.env.DATABASE_URL,
       ssl: { rejectUnauthorized: false },
-      connectionTimeoutMillis: 5000,
-    }).connect();
-    
+      max: 3,
+      connectionTimeoutMillis: 8000,
+    });
+    const client = await testPool.connect();
     const result = await client.query("SELECT 1 as test");
-    connTest = result.rows && result.rows.length > 0 ? "OK" : "no_rows";
+    connTest = result.rows && result.rows.length > 0 ? "OK - row: " + JSON.stringify(result.rows[0]) : "no_rows";
     dbStatus = "connected";
     client.release();
+    await testPool.end();
   } catch(e) {
     dbStatus = "error";
-    connTest = e.message.substring(0, 120);
+    connTest = e.message.substring(0, 200);
   }
   
   res.statusCode = 200;
