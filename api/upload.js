@@ -17,7 +17,10 @@ module.exports = async function handler(req, res) {
           return json(res, 400, { ok: false, error: "Upload file mentah di Vercel hanya untuk Excel .xlsx. File CSV tetap diproses dari browser." });
         }
         const rows = readXlsxRows(file.buffer);
-        if (!rows.length) throw new Error(`File ${file.filename} kosong atau header tidak terbaca.`);
+        safeLog("upload_file_read", { filename: file.filename, rows: rows.length, bufferSize: file.buffer?.length || 0 });
+        if (!rows.length) {
+          return json(res, 400, { ok: false, error: `File ${file.filename} kosong atau tidak terbaca (${file.buffer?.length||0} bytes). Pastikan file Excel valid.` });
+        }
         const result = await importRows({
           storeName: payload.fields.storeName,
           kind: payload.fields.kind || "auto",
