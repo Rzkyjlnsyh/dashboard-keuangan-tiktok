@@ -34,6 +34,7 @@ module.exports = async function handler(req, res) {
       return json(res, 200, { ok: true, results });
     }
     const body = await readJson(req);
+    safeLog("upload_json_body", { hasRows: !!(body && body.rows), rowsLen: body?.rows?.length, keys: body?.rows?.[0] ? Object.keys(body.rows[0]).slice(0,5) : [] });
     if (!Array.isArray(body.rows)) {
       return json(res, 400, { ok: false, error: "Upload Vercel memakai pembaca Excel/CSV di browser. Refresh halaman lalu pilih file lagi." });
     }
@@ -43,6 +44,7 @@ module.exports = async function handler(req, res) {
       filename: body.filename || "upload",
       rows: body.rows,
     });
+    safeLog("upload_json_result", { kind: result.kind, rows: result.rows, inserted: result.inserted });
     safeLog("upload_json_done", { filename: body.filename, store: body.storeName, kind: result.kind, rows: result.rows, updated: result.updated, adSpendRows: result.adSpendRows, adSpendTotal: result.adSpendTotal });
     pg.cacheDelete("split:%").catch(()=>{});
     return json(res, 200, result);
