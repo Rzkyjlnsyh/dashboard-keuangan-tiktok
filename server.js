@@ -116,8 +116,13 @@ const server = http.createServer(async (req, res) => {
       if (req.method === 'POST') {
         const buffers = [];
         for await (const chunk of req) buffers.push(chunk);
-        const rawBody = Buffer.concat(buffers).toString('utf-8');
-        if (rawBody) {
+        const rawBuffer = Buffer.concat(buffers);
+        // For multipart uploads (file), keep as Buffer; for JSON, parse as string
+        const contentType = req.headers['content-type'] || '';
+        if (contentType.includes('multipart/form-data')) {
+          vercelReq.body = rawBuffer;  // Keep as Buffer for file upload
+        } else if (rawBuffer.length > 0) {
+          const rawBody = rawBuffer.toString('utf-8');
           try {
             vercelReq.body = JSON.parse(rawBody);
           } catch {
