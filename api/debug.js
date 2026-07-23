@@ -1,5 +1,19 @@
 const pg = require("../lib/pg-connector");
-const { normalizeDateForFilter } = require("../lib/finance-cloud");
+
+// Inline normalizeDate to avoid extra module dependency at cold start
+function toDateKey(v) {
+  if (!v) return "";
+  const s = String(v).trim();
+  const iso = s.match(/^(\d{4})[-\/](\d{2})[-\/](\d{2})/);
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  const str = s.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s+(\d{1,2})\s*,?\s*(\d{4})\b/i);
+  if (str) {
+    const mi = ["jan","feb","mar","apr","may","jun","jul","aug","sep","oct","nov","dec"].indexOf(str[1].toLowerCase().slice(0,3));
+    if (mi >= 0) return `${str[3]}-${String(mi+1).padStart(2,"0")}-${String(str[2]).padStart(2,"0")}`;
+  }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? "" : d.toISOString().slice(0,10);
+}
 
 module.exports = async function handler(req, res) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -52,14 +66,14 @@ module.exports = async function handler(req, res) {
     const ads = await pg.fetchAll("finance_ad_spend", "store_name=eq.custombase&and=(spend_date.gte.2026-05-01,spend_date.lt.2026-06-01)");
     r.adsFetched = (ads||[]).length;
     const filtered = (ads||[]).filter(row => {
-      const d = normalizeDateForFilter(row.spend_date);
+      const d = toDateKey(row.spend_date);
       if (!d) return false;
       return d >= '2026-05-01' && d <= '2026-05-31';
     });
     r.adsFiltered = filtered.length;
     if (ads && ads.length > 0) {
       r.firstAdSpendDate = String(ads[0].spend_date || '');
-      r.firstAdDateSlice = normalizeDateForFilter(ads[0].spend_date);
+      r.firstAdDateSlice = toDateKey(ads[0].spend_date);
     }
   } catch(e) { r.adsTestErr = e.message; }
   
