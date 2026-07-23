@@ -22,6 +22,17 @@
         const workbook = window.XLSX.read(buffer, { type: "array", cellDates: true, raw: false });
         const sheetName = workbook.SheetNames[0];
         const sheet = workbook.Sheets[sheetName];
+        
+        // Fix !ref range — TikTok files often have truncated range
+        const keys = Object.keys(sheet).filter(k => k && k[0] !== '!');
+        let maxRow = 0, maxCol = 0;
+        for (const k of keys) {
+          try { const c = window.XLSX.utils.decode_cell(k); if (c.r > maxRow) maxRow = c.r; if (c.c > maxCol) maxCol = c.c; } catch(e) {}
+        }
+        if (maxRow > 0) {
+          sheet['!ref'] = window.XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: maxRow, c: maxCol } });
+        }
+        
         const rows = window.XLSX.utils.sheet_to_json(sheet, { defval: "" });
         
         if (!rows.length) throw new Error("File " + file.name + " kosong.");
