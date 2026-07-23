@@ -43,7 +43,8 @@
         for (let i = 0; i < rows.length; i += CHUNK) {
           const chunk = rows.slice(i, i + CHUNK);
           const part = Math.floor(i / CHUNK) + 1;
-          if (submitButton) submitButton.textContent = "Upload " + file.name + " " + part + "/" + totalParts;
+          const progressPct = Math.round(part / totalParts * 100);
+          if (submitButton) submitButton.textContent = "Upload " + file.name + " " + part + "/" + totalParts + " (" + progressPct + "%)";
           const result = await api("/api/upload", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -51,10 +52,18 @@
           });
           results.push(result);
         }
+        // Show completion
+        if (submitButton) {
+          const totalInserted = results.reduce((s,r) => s + (r.inserted||0), 0);
+          submitButton.textContent = "✅ Selesai! " + file.name + " (" + totalInserted + " baru)";
+          setTimeout(() => { submitButton.textContent = "Upload"; submitButton.disabled = false; }, 3000);
+        }
       }
       return results;
     } finally {
-      if (submitButton) { submitButton.textContent = "Upload"; submitButton.disabled = false; }
+      if (submitButton && submitButton.textContent.startsWith("Upload")) { 
+        submitButton.textContent = "Upload"; submitButton.disabled = false; 
+      }
     }
   }
   window.CloudFinance = { uploadForm };
