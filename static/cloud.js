@@ -12,24 +12,10 @@
     const results = [];
     try {
       for (const file of files) {
+        // Always read in browser, send JSON (avoids Vercel multipart issues)
         const sizeMB = (file.size / 1024 / 1024).toFixed(1);
-        
-        // For small files (< 2MB), send directly as multipart (faster server-side)
-        if (file.size < 2 * 1024 * 1024) {
-          if (submitButton) submitButton.textContent = "Upload " + file.name + " (" + sizeMB + "MB)...";
-          if (notify) notify("Mengirim " + file.name + "...", "info", false);
-          const fd = new FormData();
-          fd.append("storeName", storeName);
-          fd.append("kind", kind);
-          fd.append("files", file, file.name);
-          const result = await api("/api/upload", { method: "POST", body: fd });
-          results.push(result);
-          continue;
-        }
-        
-        // Large files: read in browser, send as JSON chunks
         if (submitButton) submitButton.textContent = "Membaca " + file.name + " (" + sizeMB + "MB)...";
-        if (notify) notify("Membaca " + file.name + " di browser...", "info", false);
+        if (notify) notify("Membaca " + file.name + "...", "info", false);
         
         if (!window.XLSX) throw new Error("Library Excel belum siap. Refresh halaman.");
         const buffer = await file.arrayBuffer();
@@ -47,7 +33,6 @@
           const chunk = rows.slice(i, i + CHUNK);
           const part = Math.floor(i / CHUNK) + 1;
           if (submitButton) submitButton.textContent = "Upload " + file.name + " " + part + "/" + totalParts;
-          if (notify && totalParts > 1) notify("Bagian " + part + "/" + totalParts + "...", "info", false);
           const result = await api("/api/upload", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
