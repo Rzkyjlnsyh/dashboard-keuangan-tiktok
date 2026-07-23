@@ -870,8 +870,11 @@ function drawTrend(rows = []) {
 async function loadConfig() {
   const cfg = await api("/api/config");
   state.config = cfg;
-  populateStores(cfg.stores || []);
-  if (!state.folderStore || !(cfg.stores || []).includes(state.folderStore)) state.folderStore = (cfg.stores || ["ventura"])[0];
+  populateStores(cfg.stores || defaultStores);
+  // Fill stores textarea
+  const ta = document.querySelector("#storesForm textarea");
+  if (ta) ta.value = (cfg.stores || defaultStores).join('\n');
+  if (!state.folderStore || !(cfg.stores || []).includes(state.folderStore)) state.folderStore = (cfg.stores || defaultStores)[0];
   el("adSpendDate").value = new Date().toISOString().slice(0, 10);
   const form = document.getElementById("configForm");
   for (const [k, v] of Object.entries(cfg)) {
@@ -1251,6 +1254,20 @@ document.getElementById("configForm").addEventListener("submit", async (event) =
   try {
     await api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data) });
     alert("Pengaturan Telegram disimpan.");
+  } catch (err) {
+    showNotice(err.message);
+  }
+});
+
+// Stores form
+document.getElementById("storesForm").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const text = event.target.elements.stores.value;
+  const stores = text.split(/[\n,]+/).map(s => s.trim()).filter(Boolean);
+  try {
+    await api("/api/config", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ stores }) });
+    alert("Daftar toko disimpan: " + stores.join(", "));
+    await loadConfig();
   } catch (err) {
     showNotice(err.message);
   }
