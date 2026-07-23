@@ -1,4 +1,5 @@
 const pg = require("../lib/pg-connector");
+const { normalizeDateForFilter } = require("../lib/finance-cloud");
 
 module.exports = async function handler(req, res) {
   res.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -51,13 +52,14 @@ module.exports = async function handler(req, res) {
     const ads = await pg.fetchAll("finance_ad_spend", "store_name=eq.custombase&and=(spend_date.gte.2026-05-01,spend_date.lt.2026-06-01)");
     r.adsFetched = (ads||[]).length;
     const filtered = (ads||[]).filter(row => {
-      const d = String(row.spend_date || "").replace(/\//g, "-").slice(0,10);
+      const d = normalizeDateForFilter(row.spend_date);
+      if (!d) return false;
       return d >= '2026-05-01' && d <= '2026-05-31';
     });
     r.adsFiltered = filtered.length;
     if (ads && ads.length > 0) {
       r.firstAdSpendDate = String(ads[0].spend_date || '');
-      r.firstAdDateSlice = String(ads[0].spend_date || '').replace(/\//g, "-").slice(0,10);
+      r.firstAdDateSlice = normalizeDateForFilter(ads[0].spend_date);
     }
   } catch(e) { r.adsTestErr = e.message; }
   
