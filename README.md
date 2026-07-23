@@ -126,3 +126,4 @@ Masuk ke `Upload & Otomatis`, lalu isi panel `Update Biaya Iklan`. Biaya iklan d
 - Mode owner menampilkan profit, HPP, potongan, refund, biaya iklan, audit perubahan, dan rekomendasi finansial.
 - Mode tim dan TV meredaksi data rahasia dari API dan tampilan.
 - PIN Owner bisa diisi dari menu `Upload & Otomatis` pada panel Telegram. Jika PIN diaktifkan, akses owner akan meminta PIN.
+trigger
