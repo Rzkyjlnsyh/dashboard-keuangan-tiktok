@@ -190,14 +190,10 @@ function readXlsxRows(buffer) {
       row[header] = value == null ? "" : value;
     }
     if (hasValue) {
-      // Skip TikTok description rows (first column or common patterns)
-      const allValues = Object.values(row).map(v => String(v || "").trim().toLowerCase()).join(" ");
+      // Skip description rows: check first column only
       const firstVal = String(Object.values(row)[0] || "").trim().toLowerCase();
       if (firstVal.includes("platform unique order") || firstVal.includes("current order status") ||
-          firstVal.includes("id transaksi") || firstVal === "nama" ||
-          allValues.includes("seller sku input by the seller") ||
-          allValues.includes("platform product name") ||
-          allValues.includes("please note: this report")) continue;
+          firstVal.includes("id transaksi") || firstVal === "nama") continue;
       rows.push(row);
     }
   }
