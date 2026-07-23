@@ -46,11 +46,20 @@ module.exports = async function handler(req, res) {
     r.columns = q.rows.map(r2=>r2.column_name);
   } catch(e) {}
   
-  // Test fetchAll for ads
+  // Test computeSummary ad filter
   try {
     const ads = await pg.fetchAll("finance_ad_spend", "store_name=eq.custombase&and=(spend_date.gte.2026-05-01,spend_date.lt.2026-06-01)");
-    r.adsFetchAll = (ads||[]).length;
-  } catch(e) { r.adsFetchAllErr = e.message; }
+    r.adsFetched = (ads||[]).length;
+    const filtered = (ads||[]).filter(row => {
+      const d = String(row.spend_date || "").replace(/\//g, "-").slice(0,10);
+      return d >= '2026-05-01' && d <= '2026-05-31';
+    });
+    r.adsFiltered = filtered.length;
+    if (ads && ads.length > 0) {
+      r.firstAdSpendDate = String(ads[0].spend_date || '');
+      r.firstAdDateSlice = String(ads[0].spend_date || '').replace(/\//g, "-").slice(0,10);
+    }
+  } catch(e) { r.adsTestErr = e.message; }
   
   // May filter test
   try {
