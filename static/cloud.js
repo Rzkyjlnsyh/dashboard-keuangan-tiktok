@@ -1,5 +1,5 @@
 (function () {
-  const CHUNK = 2000;
+  const CHUNK = 500;
 
   async function uploadForm(form, api, notify) {
     const fileInput = form.querySelector('input[type="file"]');
