@@ -46,11 +46,11 @@ module.exports = async function handler(req, res) {
     r.columns = q.rows.map(r2=>r2.column_name);
   } catch(e) {}
   
-  // Test fetchAll (fixed version)
+  // Test fetchAll for ads
   try {
-    const rows = await pg.fetchAll("finance_order_lines", "select=*&store_name=eq.custombase&limit=5");
-    r.fetchAllTest = rows.length;
-  } catch(e) { r.fetchAllError = e.message; }
+    const ads = await pg.fetchAll("finance_ad_spend", "store_name=eq.custombase&and=(spend_date.gte.2026-05-01,spend_date.lt.2026-06-01)");
+    r.adsFetchAll = (ads||[]).length;
+  } catch(e) { r.adsFetchAllErr = e.message; }
   
   // May filter test
   try {
