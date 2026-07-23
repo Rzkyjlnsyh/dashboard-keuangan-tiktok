@@ -452,7 +452,7 @@ function renderAssistant(assistant) {
 function renderStatus(rows, operationStatus = [], operationDetails = []) {
   const operationCards = document.getElementById("operationCards");
   if (operationCards) {
-    const priority = ["late", "processing", "waiting_ship", "shipped", "completed", "returned", "canceled"];
+    const priority = ["late", "processing", "waiting_ship", "waiting_pickup", "shipped", "delivered", "completed", "returned", "canceled", "cancel_valid"];
     const byBucket = new Map(operationStatus.map(row => [row.bucket, row]));
     operationCards.innerHTML = priority.map(bucket => {
       const item = byBucket.get(bucket) || { label: bucket, packages: 0, orders: 0, late: 0 };
